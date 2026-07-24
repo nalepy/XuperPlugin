@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:label="Xuper Plugin"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:theme="@style/Theme.XuperPlugin">
+
+        <activity
+            android:name=".ConfigActivity"
+            android:exported="true"
+            android:label="Xuper Plugin Settings">
+            <intent-filter>
+                <action android:name="com.xuper.plugin.CONFIGURE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".PluginService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.streamvault.plugin.API" />
+            </intent-filter>
+            <meta-data
+                android:name="com.streamvault.plugin.ID"
+                android:value="com.xuper.plugin" />
+            <meta-data
+                android:name="com.streamvault.plugin.NAME"
+                android:value="Xuper BrazilTV" />
+            <meta-data
+                android:name="com.streamvault.plugin.VERSION_NAME"
+                android:value="1.0.0" />
+            <meta-data
+                android:name="com.streamvault.plugin.VERSION_CODE"
+                android:value="1" />
+            <meta-data
+                android:name="com.streamvault.plugin.DESCRIPTION"
+                android:value="Xuper/BrazilTV IPTV provider plugin" />
+            <meta-data
+                android:name="com.streamvault.plugin.PROVIDER_NAME"
+                android:value="Xuper BrazilTV" />
+            <meta-data
+                android:name="com.streamvault.plugin.CONFIGURATION_MODE"
+                android:value="activity" />
+            <meta-data
+                android:name="com.streamvault.plugin.CONFIGURATION_ACTIVITY_ACTION"
+                android:value="com.xuper.plugin.CONFIGURE" />
+            <meta-data
+                android:name="com.streamvault.plugin.CAPABILITIES"
+                android:value="provider.m3u,playback.prepare,configuration.activity" />
+        </service>
+
+    </application>
+
+</manifest>
