@@ -59,6 +59,8 @@ data class XuperChannel(
 
 class XuperApiClient(context: Context) {
 
+    private val appContext = context.applicationContext
+
     private val prefs: SharedPreferences =
         context.getSharedPreferences("xuper_config", Context.MODE_PRIVATE)
 
@@ -68,11 +70,42 @@ class XuperApiClient(context: Context) {
         coerceInputValues = true
     }
 
+    /** Captures Set-Cookie d/s/t if the server ever rotates them. */
+    private val cookieJar = object : okhttp3.CookieJar {
+        private val store = mutableListOf<okhttp3.Cookie>()
+        override fun saveFromResponse(url: okhttp3.HttpUrl, cookies: List<okhttp3.Cookie>) {
+            synchronized(store) {
+                store.removeAll { c -> cookies.any { it.name == c.name && it.matches(url) } }
+                store.addAll(cookies)
+            }
+            var d = config.cookieD
+            var s = config.cookieS
+            var t = config.cookieT
+            var changed = false
+            for (c in cookies) {
+                when (c.name) {
+                    "d" -> if (c.value.isNotBlank() && c.value != d) { d = c.value; changed = true }
+                    "s" -> if (c.value.isNotBlank() && c.value != s) { s = c.value; changed = true }
+                    "t" -> if (c.value.isNotBlank() && c.value != t) { t = c.value; changed = true }
+                }
+            }
+            if (changed) {
+                config = config.copy(cookieD = d, cookieS = s, cookieT = t)
+            }
+        }
+        override fun loadForRequest(url: okhttp3.HttpUrl): List<okhttp3.Cookie> {
+            synchronized(store) {
+                return store.filter { it.matches(url) }
+            }
+        }
+    }
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .followRedirects(true)
+        .cookieJar(cookieJar)
         .build()
 
     var config: XuperConfig
@@ -93,6 +126,50 @@ class XuperApiClient(context: Context) {
     fun cookieHeader(): String {
         val c = config
         return "d=${c.cookieD}; s=${c.cookieS}; t=${c.cookieT}"
+    }
+
+    /** kb.f0 device snapshot (for snToken / diagnostics). */
+    fun deviceFingerprint(): DeviceFingerprint.Snapshot =
+        DeviceFingerprint.collect(appContext)
+
+    /**
+     * POST /api/portalCore/v3/snToken with encrypted device fields (kb.f0 → SnTokenBean).
+     * Returns server sn/snToken/userId when the host accepts plain (or needEncrypt) bodies.
+     * Does NOT produce streaming cookies d/s/t — those come from packer-extracted interceptors.
+     */
+    fun requestSnToken(): Result<String> {
+        val fields = DeviceFingerprint.snTokenFields(appContext)
+        val body = buildJsonObject {
+            for ((k, v) in fields) {
+                if (v.isNotBlank()) put(k, v)
+            }
+        }.toString()
+        val host = config.apiHost.ifBlank { "23.94.64.155:30822" }
+        val (code, resp) = postJson(host, "/api/portalCore/v3/snToken", body, encrypt = true)
+        if (code <= 0) return Result.failure(IOException("network: $resp"))
+        if (resp.isNullOrBlank()) return Result.failure(IOException("HTTP $code empty body"))
+        return try {
+            val obj = json.parseToJsonElement(resp).jsonObject
+            val returnCode = obj["returnCode"]?.jsonPrimitive?.contentOrNull
+            val data = obj["data"]?.jsonObject
+            val sn = data?.get("sn")?.jsonPrimitive?.contentOrNull.orEmpty()
+            val snToken = data?.get("snToken")?.jsonPrimitive?.contentOrNull.orEmpty()
+            val userId = data?.get("userId")?.jsonPrimitive?.contentOrNull.orEmpty()
+            if (userId.isNotBlank()) {
+                config = config.copy(userId = userId)
+            }
+            Result.success("HTTP $code returnCode=$returnCode sn=$sn userId=$userId snToken=${snToken.take(16)}…")
+        } catch (e: Exception) {
+            Result.success("HTTP $code raw=${resp.take(200)}")
+        }
+    }
+
+    fun applyCookies(d: String, s: String, t: String) {
+        config = config.copy(
+            cookieD = d.trim(),
+            cookieS = s.trim(),
+            cookieT = t.trim()
+        )
     }
 
     private fun baseUrl(host: String): String {
