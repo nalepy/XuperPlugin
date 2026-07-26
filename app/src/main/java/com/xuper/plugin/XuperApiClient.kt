@@ -120,7 +120,33 @@ class XuperApiClient(context: Context) {
 
     fun isSessionReady(): Boolean {
         val c = config
-        return c.cookieS.isNotBlank() && c.cookieT.isNotBlank() && c.cookieD.isNotBlank()
+        return c.cookieD.isNotBlank() && c.cookieS.isNotBlank() && c.cookieT.isNotBlank()
+    }
+
+    /** Returns which cookies are missing for diagnostics. */
+    fun missingCookies(): List<String> {
+        val c = config
+        return listOfNotNull(
+            if (c.cookieD.isBlank()) "d" else null,
+            if (c.cookieS.isBlank()) "s" else null,
+            if (c.cookieT.isBlank()) "t" else null
+        )
+    }
+
+    /** Quick connectivity check — just hit root with d cookie to see if routing works. */
+    fun checkRoute(): Result<String> {
+        val c = config
+        if (c.cookieD.isBlank()) return Result.failure(IOException("Set cookie d first (any non-empty value for route test)"))
+        val host = c.apiHost.ifBlank { "23.94.64.155:30822" }
+        val (code, body) = get(host, "/")
+        return when {
+            code == 404 -> Result.failure(IOException("Route blocked (404) — server requires d cookie for path resolution. Your d value may be invalid."))
+            code in 200..399 -> Result.success("Route OK (HTTP $code) — d cookie resolves, server responding")
+            code == 400 -> Result.failure(IOException("Route resolves (HTTP 400) but server rejects session. d/s/t cookies likely expired — recapture via MITM."))
+            code in 401..409 -> Result.failure(IOException("Auth rejected (HTTP $code) — s/t cookies expired. Recapture via MITM."))
+            code > 0 -> Result.failure(IOException("Server responded HTTP $code: ${body?.take(100)}"))
+            else -> Result.failure(IOException("Cannot reach $host: ${body ?: "no response"}"))
+        }
     }
 
     fun cookieHeader(): String {
@@ -255,13 +281,22 @@ class XuperApiClient(context: Context) {
     }
 
     fun testSession(): Result<String> {
-        if (!isSessionReady()) {
-            android.util.Log.e("XuperPlugin", "Session NOT ready — missing cookies")
-            return Result.failure(IOException("Paste cookies d, s, t first"))
-        }
-        android.util.Log.i("XuperPlugin", "Session ready, testing...")
         val c = config
         val host = c.apiHost.ifBlank { "23.94.64.155:30822" }
+
+        // First: quick route check
+        if (c.cookieD.isNotBlank()) {
+            val routeResult = checkRoute()
+            android.util.Log.i("XuperPlugin", "Route check: ${routeResult.getOrNull() ?: routeResult.exceptionOrNull()?.message}")
+            if (routeResult.isFailure) return routeResult
+        }
+
+        if (!isSessionReady()) {
+            val missing = missingCookies()
+            android.util.Log.e("XuperPlugin", "Session NOT ready — missing cookies: $missing")
+            return Result.failure(IOException("Missing cookies: ${missing.joinToString(", ")}. Capture all three (d/s/t) via MITM."))
+        }
+        android.util.Log.i("XuperPlugin", "Session ready, testing...")
 
         // try opaque playlist path first if set
         if (c.playlistPath.isNotBlank()) {

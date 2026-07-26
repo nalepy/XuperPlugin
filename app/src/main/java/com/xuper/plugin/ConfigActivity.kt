@@ -101,11 +101,33 @@ class ConfigActivity : Activity() {
             setPadding(0, 0, 0, dp(8))
         }
 
+        val routeBtn = Button(this).apply {
+            text = "Route Test"
+            setOnClickListener { testRoute() }
+        }
+        secondRow.addView(routeBtn, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
+            marginEnd = dp(4)
+        })
+
+        val snTokenBtn = Button(this).apply {
+            text = "snToken"
+            setOnClickListener { trySnToken() }
+        }
+        secondRow.addView(snTokenBtn, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
+            marginEnd = dp(4)
+        })
+        layout.addView(secondRow)
+
+        val thirdRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, dp(8))
+        }
+
         val fetchBtn = Button(this).apply {
             text = "Fetch M3U8"
             setOnClickListener { fetchM3u8() }
         }
-        secondRow.addView(fetchBtn, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
+        thirdRow.addView(fetchBtn, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
             marginEnd = dp(4)
         })
 
@@ -113,8 +135,8 @@ class ConfigActivity : Activity() {
             text = "Try v8/login"
             setOnClickListener { tryLogin() }
         }
-        secondRow.addView(loginBtn, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-        layout.addView(secondRow)
+        thirdRow.addView(loginBtn, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+        layout.addView(thirdRow)
 
         statusText = TextView(this).apply {
             setTextColor(Color.parseColor("#AAAAAA"))
@@ -191,9 +213,20 @@ class ConfigActivity : Activity() {
         emailInput.setText(c.email)
         passwordInput.setText(c.password)
         updateProxyButton()
-        if (apiClient.isSessionReady()) {
-            statusText.text = "Status: cookies present"
-            statusText.setTextColor(Color.parseColor("#4CAF50"))
+        val missing = apiClient.missingCookies()
+        when {
+            missing.isEmpty() -> {
+                statusText.text = "Status: all cookies present"
+                statusText.setTextColor(Color.parseColor("#4CAF50"))
+            }
+            missing.size == 3 -> {
+                statusText.text = "Status: need d/s/t cookies — capture via MITM on .40"
+                statusText.setTextColor(Color.parseColor("#F44336"))
+            }
+            else -> {
+                statusText.text = "Status: missing ${missing.joinToString(", ")} cookie(s)"
+                statusText.setTextColor(Color.parseColor("#FFEB3B"))
+            }
         }
     }
 
@@ -339,6 +372,43 @@ class ConfigActivity : Activity() {
                     statusText.setTextColor(Color.parseColor("#4CAF50"))
                 } else {
                     statusText.text = "Fetch failed: ${result.exceptionOrNull()?.message}"
+                    statusText.setTextColor(Color.parseColor("#F44336"))
+                }
+            }
+        }.start()
+    }
+
+    private fun testRoute() {
+        saveConfig()
+        statusText.text = "Testing route…"
+        statusText.setTextColor(Color.parseColor("#FFEB3B"))
+        Thread {
+            val result = apiClient.checkRoute()
+            runOnUiThread {
+                if (result.isSuccess) {
+                    statusText.text = result.getOrNull()
+                    statusText.setTextColor(Color.parseColor("#4CAF50"))
+                } else {
+                    statusText.text = result.exceptionOrNull()?.message
+                    statusText.setTextColor(Color.parseColor("#F44336"))
+                }
+            }
+        }.start()
+    }
+
+    private fun trySnToken() {
+        saveConfig()
+        statusText.text = "Requesting snToken…"
+        statusText.setTextColor(Color.parseColor("#FFEB3B"))
+        Thread {
+            val result = apiClient.requestSnToken()
+            runOnUiThread {
+                if (result.isSuccess) {
+                    statusText.text = result.getOrNull()
+                    statusText.setTextColor(Color.parseColor("#4CAF50"))
+                    loadConfig()
+                } else {
+                    statusText.text = "snToken failed: ${result.exceptionOrNull()?.message}"
                     statusText.setTextColor(Color.parseColor("#F44336"))
                 }
             }
