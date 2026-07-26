@@ -29,7 +29,7 @@ data class XuperConfig(
     val apiHost: String = "23.94.64.155:30822",
     val apiHostBackup: String = "",
     val useHttps: Boolean = false,
-    val cookieD: String = "",
+    val cookieD: String = "ca0e53edac957b8f6f187528933355f1",
     val cookieS: String = "QDtRcPPKDAwtROdnoGlxRgXpj64ElYpBBNH0TIZO20TIcc",
     val cookieT: String = "kzDQKAgQI3UlOy-bl3ScQrOcu3NIHFGAY5PZ6xuoZ3z",
     val userId: String = "694951876",
