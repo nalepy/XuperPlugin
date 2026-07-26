@@ -35,6 +35,7 @@ Full detail (hosts, cookies, formats, capture method) in [ARCHITECTURE.md](ARCHI
 
 | Doc | What |
 |-----|------|
+| [HANDOFF.md](HANDOFF.md) | **Start here** — Win11 (.5) orchestration across box (.4) + Ubuntu (.40): topology, verified connections, next-step execution, MITM safety, migration criteria |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Reverse-engineered 3-tier stream pipeline, cookies, formats, working MITM capture method |
 | [NEXT-BLOCKER.md](NEXT-BLOCKER.md) | Concrete plan to unblock continuous playback (unpack ijiami DEX → reverse `startPlayLive`) |
 
