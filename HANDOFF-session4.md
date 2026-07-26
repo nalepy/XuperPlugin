@@ -42,6 +42,51 @@ After any `.40` reboot, `/tmp/apkx/` is gone. Restore the two assets from the Wi
   ```
 - `~/xtv-ghidra/` (home) SURVIVES reboot: patched unidbg, jdk8/jdk21, harness, scripts, venv.
 
+---
+
+# SESSION 5 — 2026-07-26 (18:03–19:45 PST)
+
+## Frida-gadget APK (Path B) — operational
+
+**Build pipeline (working):**
+```
+python zip_inject.py  →  XTV_gadget_v3.apk  →  jarsigner  →  adb install
+```
+- Base: `XTV_clean.apk` (33.6MB, 1976 files)
+- Inject: `libfrida-gadget-arm.so` (17.9.1, 15.9MB) → `lib/armeabi-v7a/`
+- Inject: `libfrida-gadget.config.so` (JSON config)
+- Replace: `classes.dex` (from apktool smali build with `System.loadLibrary("frida-gadget")` added to `S.attachBaseContext`)
+- Sign: Android debug keystore (`~/.android/debug.keystore`, alias `androiddebugkey`)
+
+**App state by config mode:**
+| Version | Config mode | App state | Notes |
+|---------|------------|-----------|-------|
+| v3 | script `/data/local/tmp/hook.js` | **ALIVE** | Gadget loads, app survives, but no observable script output |
+| v4 | script `/data/data/.../hook.js` | ZOMBIE | App dies, zombie process |
+| v5 | listen+resume `:27042` | ZOMBIE | Gadget connects on port, but app dies before frida attaches |
+
+**v3 is the working baseline.** App stays alive with gadget loaded. Likely because script file is SELinux-blocked (can't read from `/data/local/tmp/`), so gadget stays dormant — doesn't trigger ijiami detection but also doesn't hook anything.
+
+**Next session fix:** Use `/sdcard/hook.js` (SELinux permissive) or embed script as APK asset. Or use listen+**wait** mode — pauses app until frida connects, frida can inject hooks before app resumes and ijiami checks run.
+
+## Off-device unidbg state
+- `~/xtv-ghidra/harness/src/main/java/com/xtv/Unpack.java` — 27-iteration harness
+- `~/xtv-ghidra/harness/src/main/java/com/xtv/WideScan.java` — minimal harness (9 iterations)
+- JNI_OnLoad works, RegisterNatives captured, GOT chain verified
+- Blocked: singleton GOT entries zero, ctor gate = infinite-loop trap
+- `.40` currently alive, assets restored
+
+## Windows workspace
+- `C:/Users/Nestor/Workspace/Xuper/` — APK builds, scripts
+  - `XTV_gadget_v3.apk` — working baseline
+  - `xtv_gadget/` — apktool decoded dir (smali patch source)
+  - `frida_gadget/` — frida-gadget .so files
+  - `hook_native.js` / `hook_gadget.js` — frida scripts
+- `C:/Users/Nestor/Workspace/Xuper/XuperPlugin/` — git repo
+  - `Unpack.java`, `WideScan.java` — unidbg harnesses
+  - `NEXT-BLOCKER.md` — full session 5 findings
+  - `_assets/` — libexec.so, ijiami.dat, live APK, oat files
+
 ## What's built & where (all on `.40`, survives reboot)
 - **Patched unidbg `0.9.10-SNAPSHOT`** installed in `~/.m2/.../unidbg-android/0.9.10-SNAPSHOT/`.
   Source patches in `~/xtv-ghidra/unidbg/unidbg-android/src/main/java/com/github/unidbg/linux/`

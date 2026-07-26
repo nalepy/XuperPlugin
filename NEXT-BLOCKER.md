@@ -237,16 +237,67 @@ Once we can call it: the returned URL IS the fresh playlist (path + the one-time
 already fetches the playlist and passes the open magloud segments through. The
 proxy loop re-calls startPlayLive each cycle → continuous live, no manual capture.
 
+---
+
+# SESSION 5 — 2026-07-26 (18:03–19:45 PST)
+
+## Off-device unidbg (Paths A + C)
+
+**Achieved:**
+- JNI_OnLoad returns `JNI_VERSION_1_6` (SUCCESS) — sanity function short-circuit works
+- Full RegisterNatives table captured:
+  - `N`: 7 methods — `l`, `r`, `ra` (real code @ 0x381c1–0x393ed), `b2b`/`m`/`sa`/`al` (trampoline stubs @ 0x39459–0x39461)
+  - `C`: 1 method, `HM`: 2, `SE`: 1 (`sd(String)String`)
+- 27 harness iterations (`Unpack.java`), 9 minimal harness iterations (`WideScan.java`)
+- GOT chain verified correct (PC-relative offset fix)
+- `ijiami.ajm` (2.5MB, `indl01` magic) + `IJMDal.Data` (17KB) discovered — DEX split across containers
+- Embedded stub DEX in libexec.so: 156B + 280B (same as before)
+
+**Blocked:**
+- Singleton at `0x120868e0` never populated — ctor integrity gate ends in infinite-loop trap
+- `N.l` crashes on `[r0,#0x188]` null deref — GOT entries zero
+- No DEX decrypted — ctors behind integrity gate never execute
+- `.40` OOM-wedged 3 times (wide hooks)
+
+**Key repo files:** `Unpack.java` (22KB, 27 iterations), `WideScan.java` (12KB, 9 iterations)
+
+## On-device frida-gadget (Path B)
+
+**Achieved:**
+- BlackDex32 installs/runs but hangs at "Desempaquetando" — ijiami v4 blocks DEX extraction
+- libexec.so NOT visible in live process maps — loaded anonymously
+- Full RegisterNatives would be captured if frida worked
+- **frida-gadget APK built and installed** — `XTV_gadget_v3.apk` works
+  - `libfrida-gadget-arm.so` (17.9.1) injected into APK lib/armeabi-v7a/
+  - `System.loadLibrary("frida-gadget")` added to `S.smali` `attachBaseContext`
+  - Built via Python zipfile (avoids apktool signing issues)
+  - Signed with Android debug keystore
+
+**Blocked:**
+- Listen mode: app becomes zombie immediately (ijiami kills before frida connects)
+- Script mode (v3): app survives but script output silent
+- Script reads from `/data/local/tmp/` blocked by SELinux
+- `send()` output not reaching `logcat -s Frida:*`
+- Need to verify gadget actually hooks (try `Process.enumerateModules()` in script, or write output to `/sdcard/`)
+
+## New assets
+- `XTV_gadget_v3.apk` (script mode, app survives) — `C:/Users/Nestor/Workspace/Xuper/`
+- `XTV_gadget_v4.apk` (script mode, app data path) — zombie
+- `XTV_gadget_v5.apk` (listen+resume) — zombie
+- `hook_gadget.js` — native anti-kill + DEX dump hooks
+- `hook_native.js` — minimal send()-based debug script
+- `APK build chain`: `xtv_gadget/build/apk/classes.dex` (modified smali), `frida_gadget/libfrida-gadget-arm.so`
+
+---
+
 ## Immediate next actions (checklist)
 
-- [ ] Get a decrypted DEX dump (BlackDex on box is the lowest-friction try).
-- [ ] `snap install jadx` on `.40`; decompile the dump.
-- [ ] Locate `startPlayLive` Retrofit def + call site; record host/path/body.
-- [ ] Confirm body (and path?) encryption via `XuperCrypto` scheme.
-- [ ] Implement/verify `XuperApiClient.startPlayLive()` against a pinned host
-      (our OkHttp, no pinning) → expect a playlist URL back.
-- [ ] Wire `M3uProxyServer` to re-call startPlayLive per playlist cycle.
-- [ ] End-to-end: plugin serves continuous live to VLC/StreamVault, no manual cookies.
+- [ ] **Fix gadget script execution**: use `/sdcard/` path (SELinux permissive) or embed script as APK asset
+- [ ] **Verify gadget hooks**: `Process.enumerateModules()` in script, check console output
+- [ ] **Switch to listen+wait mode**: pauses app until frida connects, bypasses ijiami kill timing
+- [ ] **Once frida connected**: hook `DETool.loadDEso`, capture decrypted DEX buffer
+- [ ] **DEX recovered** → `jadx` decompile → find `startPlayLive` endpoint + body format
+- [ ] **Implement** `XuperApiClient.startPlayLive()` → wire to `M3uProxyServer` → continuous live TV
 
 ## Reference: what we already have
 
@@ -256,3 +307,5 @@ proxy loop re-calls startPlayLive each cycle → continuous live, no manual capt
   `portalCode=6e54356f76774c54574b303d`, streamKey `cyx_93531158996778016`.
 - 3DES scheme + key already in `XuperCrypto.kt`.
 - Segments (magloud) are open — no auth needed once we have the playlist.
+- `RegisterNatives` table fully known — decrypt function is `N.l`/`N.r`/`N.ra` at known addresses
+- `.4` device: adb root, SDK 29, ARM 32-bit, test-keys image
