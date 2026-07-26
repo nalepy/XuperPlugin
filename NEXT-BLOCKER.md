@@ -12,12 +12,26 @@ exact request: host, path, headers, and the 3DES-encrypted body fields.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full stream pipeline.
 
-## Why plain jadx won't work
+## Why plain jadx won't work (confirmed 2026-07-26)
 
-The APK is **ijiami-packed** (v4). Outer `classes.dex` is a 13 KB stub; real code
-lives in `assets/ijiami.dat` (4.5 MB, encrypted) + `assets/ijm_lib/*/libexec.so`,
-decrypted into memory at runtime. jadx on the raw APK shows only the loader.
-**You must obtain the decrypted DEX first**, then jadx that.
+The APK is **ijiami-packed** (v4). Outer `classes.dex` is a 14 KB stub with 4 classes
+in package `s.h.e.l.l`:
+- `A.java` — `AppComponentFactory` subclass, hooks `instantiateClassLoader`
+- `S.java` — `Application` subclass, calls `DETool.loadDEso()` to decrypt `ijiami.dat`
+- `N.java` — native helper, `System.load("libexec.so")`, provides `al()`, `b2b()`, `l()`, `r()`, `ra()`
+- `C.java` — native callback `i(int)`
+
+Real app class: `com.interactive.brasiliptv.app.AppWrapper` — loaded by N.al() after decryption.
+Real code in `assets/ijiami.dat` (4.5 MB, encrypted) + `assets/ijm_lib/armeabi/libexec.so`,
+decrypted into memory at runtime by `com.ijm.dataencryption.DETool`.
+
+**DEX header wiping confirmed:** ijiami v4 wipes DEX magic bytes (`dex\n035`) from memory
+after class loading. Scanning 512MB dalvik region space found 0 DEX headers. Both
+BlackDex and DarkDex failed to recover DEX files.
+
+**Current status (2026-07-26 ~02:00):**
+All on-device DEX dumpers exhausted (BlackDex, DarkDex, memory scan). Next best path:
+capture fresh s/t cookies via MITM, then probe portalCore API directly with 16 known hosts.
 
 ## Two tracks (either one unblocks us)
 

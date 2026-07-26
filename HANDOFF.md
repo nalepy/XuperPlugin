@@ -3,15 +3,18 @@
 For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md) first.
 
-## TL;DR
+## TL;DR (updated 2026-07-26 ~02:00)
 
-- **Do we still need MITM at .40 for the next step?** **No.** The next blocker
-  (reverse `startPlayLive`) is solved by dumping the decrypted DEX on the box and
-  reading it with jadx — no traffic interception. MITM only comes back to
-  re-capture fresh `s`/`t` session cookies (~30 min lifetime) for end-to-end
-  testing, or if you fall back to the harder frida SSL-unpin route.
-- **Orchestration stays on Win11 (.5)** until `.40` is proven able to run the
-  whole loop without killing its own internet. Win11 is the safety net.
+- **DEX dump failed** — ijiami v4 wipes DEX headers in memory. BlackDex (hung),
+  DarkDex (0 dex, 1249 URLs + 12 classes extracted), memory dump (no DEX magic).
+  See [STATUS](#ijiami-v4-dumping-attempts-2026-07-26) below.
+- **MITM IS needed next** — capture fresh `s`/`t` cookies so we can probe
+  portalCore API directly. Cookies from last session are stale (days old).
+- **Stub decompiled** — real app class is `com.interactive.brasiliptv.app.AppWrapper`,
+  loaded by `DETool.loadDEso()`. DEX decrypted by native `libexec.so` via `N.b2b()`.
+- **11 portalCore hosts identified** by DarkDex (up from 5 pinned hosts known before).
+  See [portalCore hosts](#portalcore-hosts-discovered) below.
+- **Orchestration stays on Win11 (.5)**.
 
 ## Machine topology (verified 2026-07-26)
 
@@ -176,10 +179,66 @@ Until then: Win11 stays the brain; `.40` is just the build/analysis muscle.
 ## Quick reference
 
 - XTV: `com.android.mgstv` v4.34.5 (ijiami-packed). Creds `nestor.ale@gmail.com` / `Ian20jesus`.
+- Real app class (inside encrypted DEX): `com.interactive.brasiliptv.app.AppWrapper`
 - Box `.4`: rooted, `su` no password. Laptop `.40`: `nestor` / `ian20jesus`.
 - Plugin appId `com.xuper.plugin`, launch `.ConfigActivity`.
 - Device: `userId=694951876`, `portalCode=6e54356f76774c54574b303d`,
   streamKey `cyx_93531158996778016`, SN `ca0e53edac957b8f6f187528933355f1`.
 - Playlist host `cdsr.higoesutn.com:80`; segments `magloud.y6oseldsc.online` (open).
-- Pinned portalCore hosts: `espjey.ysnihrwtg.com`, `sxowvd.jzvqwcyor.com`,
-  `yrqucu.czxenpyba.com`, `eskna.ucpjdhivl.com`, `ernsm.prxmnvhcy.com`.
+- **Jadx 1.5.3 installed on Win11**: `C:/Users/Nestor/Downloads/jadx/bin/jadx.bat`
+  with `JAVA_HOME="C:/Program Files/Microsoft/jdk-17.0.18.8-hotspot"`.
+- **DarkDex APK**: `C:/Users/Nestor/Downloads/DarkDex.apk` (installed on box as `com.darkdex`)
+
+## portalCore hosts discovered (DarkDex intel, 2026-07-26)
+
+Previously known 5 pinned hosts: `espjey.ysnihrwtg.com`, `sxowvd.jzvqwcyor.com`,
+`yrqucu.czxenpyba.com`, `eskna.ucpjdhivl.com`, `ernsm.prxmnvhcy.com`.
+
+Additional hosts from DarkDex intel (total 11 more):
+`bmagon.sxcrwendu.com`, `vgwbm.uwfyobivh.com`, `yvhcn.hxjebagrv.com`,
+`zxiws.tcgwhnvym.com`, `rokbd.ysrkwctjg.com`, `nxiqj.jgrqyxupl.com`,
+`sfgknh.qho3cnsyil.com`, `jpktl.gczpjqyfu.com`, `iyut.xgw3sdzoac.com`,
+`ioermd.l7hsgo8g.com`, `hbyyqx.qtg20rybb.xyz`.
+
+CDN auth endpoint: `vdes.medika7c7.com` with query params including
+`auth_id=694951876_com.android.msandroid__0`, `user_id=694951876`,
+`ctrl_type=account`, `app_id=com.android.msandroid`.
+
+DarkDex extracted config: `"apkVersion":"43405","appId":"com.android.msandroid"`.
+Note: appId differs from package name (`com.android.mgstv`).
+
+## ijiami v4 dumping attempts (2026-07-26)
+
+| Tool | Result | Detail |
+|------|--------|--------|
+| BlackDex32 v3.2 | HUNG | Progress dialog "Desempaquetando…" frozen. ijiami anti-tamper suspected. |
+| DarkDex | 0 DEX, 1249 URLs, 12 classes | Root mode, full mem dump. Header-wiped DEX not recoverable. Intel file at `C:/Users/Nestor/Downloads/xtv_intel.txt`. |
+| Manual /proc/PID/mem dump | 0 DEX magic | 512MB dalvik region scanned with grep `\x64\x65\x78\x0a\x30\x33\x35` — none found. |
+| Stub DEX decompilation | 4 classes found | `s.h.e.l.l` package: AppComponentFactory, Application, native loader, callback. Real app class: `com.interactive.brasiliptv.app.AppWrapper`. Loader uses `DETool.loadDEso()` for decryption. |
+| libexec.so strings | No API strings | Native lib only handles decryption — actual API code is in encrypted `ijiami.dat` (4.5MB) decrypted at runtime. |
+
+## Updated next steps
+
+**Priority A — MITM capture fresh s/t cookies:**
+1. Follow MITM procedure in [ARCHITECTURE.md](ARCHITECTURE.md) (box-source-only PREROUTING on `.40`).
+2. Cold-start XTV, let it play ~30s, capture traffic.
+3. Parse flow with `parse_flow.py` pattern — extract `s`/`t` cookies from playlist requests.
+
+**Priority B — Probe portalCore API with fresh cookies:**
+1. Use the 16 portalCore hosts (5 known + 11 from DarkDex).
+2. Try paths: `/api/portalCore/v4/startPlayLive`, `/api/portalCore/v3/startPlayLive`, etc.
+3. Try body fields: `{channelCode, portalCode, userId, userToken, type:"live", columnId?}`
+4. Use plugin's OkHttp client (no cert pinning) + 3DES encryption from `XuperCrypto.kt`.
+5. First response that returns `liveAddressList` → we have the format.
+
+**Priority C — Frida DEX dump (fallback):**
+1. Install `frida-server-16.x.x-android-arm` on box.
+2. Hook `N.b2b(byte[], int)` native method during XTV startup — capture decrypted DEX bytes.
+3. Or hook `DETool.loadDEso()` to intercept the decryption call.
+4. Write decrypted byte array to disk, then jadx it.
+5. Requires bypassing ijiami anti-frida (fork+ptrace).
+
+**Priority D — Pure static (research):**
+1. The AWAKE wiki says ijiami.dat has `SM4` cipher with `per-chunk key derivation`.
+2. The plaintext-MD5 integrity tag is visible in the header.
+3. Key material may be in `libexec.so` `.rodata` section.
