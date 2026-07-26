@@ -50,19 +50,20 @@ class ConfigActivity : Activity() {
             setPadding(0, 0, 0, dp(8))
         })
         layout.addView(TextView(this).apply {
-            text = "Auth = cookies d / s / t from live capture (not plain email login on wire)"
+            text = "Playlist host = cdsr.higoesutn.com (needs one-time d + session s/t). " +
+                "Segments = magloud CDN (open, no auth). Capture d/s/t via MITM."
             setTextColor(Color.parseColor("#AAAAAA"))
             textSize = 12f
             setPadding(0, 0, 0, dp(12))
         })
 
-        apiHostInput = createInput(layout, "API Host", "23.94.64.155:30822")
-        cookieDInput = createInput(layout, "Cookie d", "paste d= value")
-        cookieSInput = createInput(layout, "Cookie s", "paste s= value")
-        cookieTInput = createInput(layout, "Cookie t", "paste t= value")
+        apiHostInput = createInput(layout, "Playlist Host", "cdsr.higoesutn.com")
+        cookieDInput = createInput(layout, "Cookie d (one-time playlist token)", "paste d= value")
+        cookieSInput = createInput(layout, "Cookie s (session)", "paste s= value")
+        cookieTInput = createInput(layout, "Cookie t (session)", "paste t= value")
         streamKeyInput = createInput(layout, "Stream user key (cyx_)", "cyx_93531158996778016")
-        playlistPathInput = createInput(layout, "Playlist opaque path", "/vs1/qwfwhijbcqraxaoo/swuvq")
-        segmentPathInput = createInput(layout, "Segment opaque path", "/aiejqfv/fmydf")
+        playlistPathInput = createInput(layout, "Playlist opaque path", "/brpvotelpbjrt")
+        segmentPathInput = createInput(layout, "Segment opaque path (unused — CDN URLs are direct)", "")
         userIdInput = createInput(layout, "userId (optional)", "")
         userTokenInput = createInput(layout, "userToken (optional)", "")
         emailInput = createInput(layout, "Email (optional v8/login)", "your@email.com")

@@ -195,51 +195,34 @@ class M3uProxyServer(private val context: Context) {
         }
     }
 
+    /**
+     * Normalize the Xuper playlist into standard HLS.
+     *
+     * The upstream playlist (from cdsr.higoesutn.com) lists each live chunk as:
+     *   #EXT-SEGMENT:0-564187/rd=5199132911   (non-standard byte-range + rd id)
+     *   #EXTINF:4.004, no desc
+     *   http://magloud.y6oseldsc.online/live/<key>/<key>_cyx_cj_<rd>.ts
+     *
+     * The .ts segment URLs are full and served openly by the CDN (no cookies),
+     * so we drop the non-standard #EXT-SEGMENT lines and pass the direct URLs
+     * through unchanged — the player fetches segments straight from the CDN.
+     */
     private fun rewriteM3u(content: String): String {
         val sb = StringBuilder()
-        var segmentIndex = 0
-        var pendingStart = -1L
-        var pendingEnd = -1L
-
         for (line in content.lines()) {
             val trimmed = line.trim()
-
-            if (trimmed.startsWith("#EXT-SEGMENT:")) {
-                val tagBody = trimmed.substringAfter("#EXT-SEGMENT:")
-                val parts = tagBody.split(",")
-                if (parts.size >= 2) {
-                    pendingStart = parts[0].trim().toLongOrNull() ?: -1L
-                    pendingEnd = parts[1].trim().toLongOrNull() ?: -1L
-                }
-                sb.appendLine(trimmed)
-                continue
-            }
-
-            if (trimmed.startsWith("#")) {
-                sb.appendLine(trimmed)
-                continue
-            }
-
-            if (trimmed.isEmpty()) {
-                sb.appendLine()
-                continue
-            }
-
-            if (pendingStart >= 0 && pendingEnd >= 0) {
-                sb.appendLine("/segment/$segmentIndex?range=$pendingStart-$pendingEnd")
-                segmentIndex++
-                pendingStart = -1L
-                pendingEnd = -1L
-            } else {
-                sb.appendLine(trimmed)
+            when {
+                trimmed.startsWith("#EXT-SEGMENT:") -> continue // drop non-standard tag
+                trimmed.startsWith("#") -> sb.appendLine(trimmed)
+                trimmed.isEmpty() -> sb.appendLine()
+                else -> sb.appendLine(trimmed) // direct .ts URL — pass through
             }
         }
-
         return sb.toString()
     }
 
     private fun countSegments(content: String): Int {
-        return content.lines().count { it.trim().startsWith("/segment/") }
+        return content.lines().count { it.trim().let { l -> l.isNotEmpty() && !l.startsWith("#") } }
     }
 
     private fun handleSegment(socket: Socket, path: String, headers: Map<String, String>) {
