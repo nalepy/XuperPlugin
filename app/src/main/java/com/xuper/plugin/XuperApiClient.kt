@@ -30,16 +30,16 @@ data class XuperConfig(
     val apiHostBackup: String = "",
     val useHttps: Boolean = false,
     val cookieD: String = "",
-    val cookieS: String = "",
-    val cookieT: String = "",
-    val userId: String = "",
+    val cookieS: String = "QDtRcPPKDAwtROdnoGlxRgXpj64ElYpBBNH0TIZO20TIcc",
+    val cookieT: String = "kzDQKAgQI3UlOy-bl3ScQrOcu3NIHFGAY5PZ6xuoZ3z",
+    val userId: String = "694951876",
     val userToken: String = "",
-    val portalCode: String = "",
+    val portalCode: String = "6e54356f76774c54574b303d",
     val streamUserKey: String = "cyx_93531158996778016",
     val cdnMain: String = "magloud.y6oseldsc.online",
     val cdnBackup: String = "caeo.wvdbozpfc.com",
-    val email: String = "",
-    val password: String = "",
+    val email: String = "nestor.ale@gmail.com",
+    val password: String = "Ian20jesus",
     val playlistPath: String = "",
     val segmentPath: String = ""
 )
@@ -241,19 +241,25 @@ class XuperApiClient(context: Context) {
     private fun get(host: String, path: String): Pair<Int, String?> {
         val url = portalUrl(host, path)
         val req = requestBuilder(url).get().build()
+        android.util.Log.i("XuperPlugin", "GET $url")
         return try {
             client.newCall(req).execute().use { resp ->
-                resp.code to resp.body?.string()
+                val body = resp.body?.string()
+                android.util.Log.i("XuperPlugin", "HTTP ${resp.code} body=${body?.take(200)}")
+                resp.code to body
             }
         } catch (e: IOException) {
+            android.util.Log.e("XuperPlugin", "GET failed: ${e.message}")
             -1 to e.message
         }
     }
 
     fun testSession(): Result<String> {
         if (!isSessionReady()) {
+            android.util.Log.e("XuperPlugin", "Session NOT ready — missing cookies")
             return Result.failure(IOException("Paste cookies d, s, t first"))
         }
+        android.util.Log.i("XuperPlugin", "Session ready, testing...")
         val c = config
         val host = c.apiHost.ifBlank { "23.94.64.155:30822" }
 
@@ -274,9 +280,30 @@ class XuperApiClient(context: Context) {
         }
 
         // legacy: try plain root or token-based path
-        val (code2, _) = get(host, "/")
+        android.util.Log.i("XuperPlugin", "Trying legacy GET / ...")
+        val (code2, body2) = get(host, "/")
+        android.util.Log.i("XuperPlugin", "Legacy GET / = $code2 body=${body2?.take(100)}")
+
+        // If 401/409, try v8/login with email/password
+        if (code2 == 401 || code2 == 409) {
+            android.util.Log.i("XuperPlugin", "Cookies rejected (401/409), trying v8/login...")
+            val loginResult = loginV8()
+            android.util.Log.i("XuperPlugin", "Login result: ${loginResult.getOrNull() ?: loginResult.exceptionOrNull()?.message}")
+            if (loginResult.isSuccess) {
+                // Retry with fresh token
+                val (code3, body3) = get(host, "/")
+                android.util.Log.i("XuperPlugin", "Retry after login: $code3 body=${body3?.take(100)}")
+                return if (code3 in 200..399) {
+                    Result.success("Login OK! HTTP $code3 body=${body3?.take(200)}")
+                } else {
+                    Result.failure(IOException("Login succeeded but GET / still $code3"))
+                }
+            }
+            return Result.failure(IOException("Login failed: ${loginResult.exceptionOrNull()?.message}"))
+        }
+
         return if (code2 > 0) {
-            Result.failure(IOException("Connected ($host) but path rejected. code=$code2. Need opaque playlist path in config."))
+            Result.failure(IOException("Connected ($host) but path rejected. code=$code2"))
         } else {
             Result.failure(IOException("Cannot reach $host: code=$code2"))
         }
@@ -330,8 +357,10 @@ class XuperApiClient(context: Context) {
     fun loginV8(): Result<String> {
         val c = config
         if (c.email.isBlank() || c.password.isBlank()) {
+            android.util.Log.e("XuperPlugin", "loginV8: email/password empty")
             return Result.failure(IOException("email/password empty"))
         }
+        android.util.Log.i("XuperPlugin", "loginV8: trying ${c.email}...")
         val body = buildJsonObject {
             put("email", c.email)
             put("password", c.password)

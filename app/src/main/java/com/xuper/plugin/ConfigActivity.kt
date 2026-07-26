@@ -125,6 +125,23 @@ class ConfigActivity : Activity() {
 
         setContentView(ScrollView(this).apply { addView(layout) })
         loadConfig()
+
+        android.util.Log.e("XUPER", "Config loaded. Session ready: " + apiClient.isSessionReady())
+
+        // Auto-test on launch — run on background thread
+        layout.postDelayed({
+            Thread {
+                if (!apiClient.isSessionReady()) {
+                    android.util.Log.e("XUPER", "No cookies — trying loginV8...")
+                    val r = apiClient.loginV8()
+                    val msg = "Login: " + (r.getOrNull() ?: r.exceptionOrNull()?.message ?: "?")
+                    android.util.Log.e("XUPER", msg)
+                    runOnUiThread { statusText.text = msg }
+                } else {
+                    testSession()
+                }
+            }.start()
+        }, 3000)
     }
 
     private fun createInput(
