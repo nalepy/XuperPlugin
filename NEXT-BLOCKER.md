@@ -33,6 +33,127 @@ BlackDex and DarkDex failed to recover DEX files.
 All on-device DEX dumpers exhausted (BlackDex, DarkDex, memory scan). Next best path:
 capture fresh s/t cookies via MITM, then probe portalCore API directly with 16 known hosts.
 
+**UPDATE — session 2 (2026-07-26 ~09:00): blind-probe + MITM avenue CLOSED.**
+- Re-analyzed retained captures: `s`/`t` stable, `d`=prefix+rotating-tail, PATH rotates
+  per fetch; rotation source is NOT in any plaintext response. The 11 DarkDex
+  "portalCore hosts" are ancillary plaintext services (ads/notice/EPG/update) +
+  a plaintext `ws://` heartbeat (`sgyc.bfj1k2g4v.com/v1/imagine`). See ARCHITECTURE.md
+  "Refined model" section. `23.94.64.155:30822` (plugin's apiHost) is DEAD (404).
+- **Cold-start MITM disqualifier (decisive):** brought mitm up BEFORE launch, drove
+  XTV into a live channel. Result: NO cdsr, NO seed, NO login on TCP 80/443 — only
+  the `sgyc` ws (101, **0 data frames**, reconnecting ~12s) + ip-api. Player STALLED.
+  Old captures only "worked" because the seed was fetched before mitm was applied.
+  ⇒ **The streaming seed is genuinely cert-pinned (and/or QUIC/h3). MITM can NEVER
+  capture it. Blind-probe is impossible — we have zero observations of that API.**
+- **frida spawn+child-gating retried → same TimedOutError wall** (spawn coordination).
+  Box has NO Magisk (system test-keys root) ⇒ LSPosed/Xposed not installable.
+- **Remaining viable path = OFF-DEVICE only:** Ghidra + unidbg to emulate
+  `assets/ijm_lib/armeabi/libexec.so` (435 KB, not stripped, decryptor; native fns
+  registered via RegisterNatives — no clean export; 63 init_array ctors) and decrypt
+  `assets/ijiami.dat` (4.56 MB) → recover DEX → JADX → read `startPlayLive`. HIGH
+  effort, multi-session. All assets already extracted on `.40` at `/tmp/apkx/`.
+  On-device runtime tools (frida/LLDB/QBDI/DBI) all fight ijiami anti-debug+fork.
+
+**UPDATE — session 3 (2026-07-26 ~10:20): OFF-DEVICE EMULATION PIPELINE WORKS. One blocker left.**
+
+Built the whole off-device rig on `.40` under `~/xtv-ghidra/`:
+- Ghidra 11.3.2 headless + JDK21 (`~/xtv-ghidra/ghidra_11.3.2_PUBLIC`, `jdk21`).
+- capstone/pyelftools venv (`~/xtv-ghidra/venv`) + analysis scripts (`~/xtv-ghidra/scripts/`).
+- Maven 3.9.9 (`~/xtv-ghidra/maven`) + unidbg harness project (`~/xtv-ghidra/harness`).
+
+Findings:
+- **`libexec.so` is SELF-ENCRYPTING.** Static Ghidra is walled: exec segment entropy
+  7.5–7.88 in quarters 1–3 (q0=5.4 loader stub); JNI_OnLoad bytes decode to garbage in
+  both ARM and Thumb. The real code (JNI_OnLoad @ raw 0x3725c, RegisterNatives table,
+  the .dat decrypt fn) is ciphertext at rest, unpacked by the 63 `init_array` ctors at
+  runtime. Native code NEVER references `"ijiami.dat"` ⇒ the Java `DETool` reads the file
+  and passes the buffer to a RegisterNatives method (name still encrypted).
+- **unidbg emulation is the key and it RUNS.** Correct combo (critical): the published
+  unicorn **1.0.15 native is broken** (split build, `undefined symbol: helper_div_i32`)
+  on BOTH linux_64 and linux_arm64. Working matched pair = **unidbg-android 0.9.8 +
+  unicorn 1.0.14** (self-contained 5 MB native). Extract `natives/linux_64/libunicorn_java.so`
+  from the 1.0.14 jar onto `-Djava.library.path`. Runs on x86-64 `.40` directly.
+  (unidbg 0.9.9 needs unicorn 1.0.15 API `reg_read(int)->long` → forces the broken native.)
+- Under emulation the ctors run, **.text self-decrypts**, and real ARM/Thumb executes
+  through the ijiami loader (verified: PC executing valid Thumb at 0x4001f804 and decrypted
+  code at 0x402b6xxx; module base 0x40000000). A wide mem-scan dumped 1.8 MB of decrypted
+  pages (`/tmp/apkx/mem_scan.bin` + `.idx`). Only tiny stub DEX (156/280 B) present so far —
+  the **app DEX from ijiami.dat is decrypted only AFTER JNI_OnLoad**, which we can't reach yet.
+
+**THE ONE REMAINING BLOCKER (session 3):**
+An early ctor does `mmap2(start=0x4001e000, len=0x5e4f4, prot=RW, flags=MAP_FIXED|ANON)` —
+ijiami munmaps its own .text mapping and re-maps decrypted code in place. unidbg **0.9.8's**
+`AbstractLoader.munmap` throws `IllegalStateException: munmap aligned=0x5f000, start=0x4001e000`
+because the unmap range is partial AND spans the gap between LOAD1 (ends 0x40054b1c) and
+LOAD2 (0x400804f0) — a partially-unmapped range unicorn can't `mem_unmap`. This aborts the
+ctor (→ `UC_ERR_FETCH_UNMAPPED`), so JNI_OnLoad returns JNI_ERR (0xffffffff) and the .dat
+decrypt is never reached.
+
+**Two fixes (either unblocks — pick one next session):**
+1. **Working unicorn 1.0.15 native** → use unidbg-android **0.9.9**, whose `munmap` is the
+   newer robust version (splits blocks, handles removed==null / adjacent regions). Build the
+   `zhkl0228/unicorn` fork's `libunicorn_java.so` for linux_64 (cmake/gcc, self-contained).
+   Cleanest: one C build unblocks the robust loader.
+2. **Patch unidbg 0.9.8 from source** (needs JDK8 — `Module` ambiguity blocks JDK17 build):
+   make `mmap2` MAP_FIXED clamp the `munmap` to actually-mapped pages (skip gaps) and/or
+   split MemoryMap blocks like master does. Rebuild `unidbg-android`, relink harness.
+   Master source is already cloned at `~/xtv-ghidra/unidbg` (its `munmap` is the robust one
+   to port back).
+
+Once past the remap: let JNI_OnLoad finish → hook RegisterNatives (unidbg logs the method
+table) → call the decrypt native on the `ijiami.dat` bytes → dump the real app DEX → jadx →
+grep `startPlayLive`. Fallback: after JNI_OnLoad, re-run the wide mem-scan; the app DEX
+(multi-MB, `dex\n035` magic, real `file_size`) will be sitting decrypted in memory.
+
+Harness entry: `~/xtv-ghidra/harness/src/main/java/com/xtv/Unpack.java`
+Run: `cd ~/xtv-ghidra/harness && CP="target/classes:$(cat ~/xtv-ghidra/cp.txt)" && \
+  java -Djava.library.path=~/xtv-ghidra/nativelib -cp "$CP" com.xtv.Unpack`
+
+**UPDATE — session 4 (2026-07-26 ~16:00): session-3 blocker SOLVED + 2 more traps cracked. New 4th blocker.**
+
+The documented mmap/munmap blocker is fixed and `loadLibrary()` now fully succeeds (all 63
+ctors run, returns `base=0x12000000`); execution reaches `JNI_OnLoad`. Three durable fixes,
+all committed to the unidbg source tree on `.40` (grep `XTV-PATCH`):
+
+1. **munmap gap-spanning MAP_FIXED remap → FIXED.** Key correction to session-3's premise:
+   - unidbg **master (`0.9.10-SNAPSHOT`, cloned at `~/xtv-ghidra/unidbg`) ships a working
+     self-contained `unicorn2` backend** (`backend/unicorn2`, prebuilt `libunicorn.so`,
+     `nm -D` confirms `helper_div_i32_*` defined, all 31 JNI entry points). **No unicorn
+     native build was needed.** But `AndroidEmulatorBuilder` silently uses the OLD broken
+     backend unless you explicitly register **`Unicorn2Factory`** — done in `Unpack.java`.
+   - master's "robust" `munmap` still does NOT handle ijiami's case (it only splits when
+     `start` == a tracked block base; ijiami starts mid-block and spans TWO segments across
+     the LOAD1/LOAD2 gap → always hits the throwing branch). Real patch required:
+     `AndroidElfLoader.clampedMunmapForFixedRemap()` — unmaps/re-tracks only the overlapping
+     sub-ranges across N blocks, skipping gaps. Fires once for the remap, unions to `0x5f000`.
+   - Building unidbg from source needs **JDK8** (JDK17/21 hit the `Module` ambiguity even on
+     master) → `~/xtv-ghidra/jdk8u492-b09`; build with `-Dgpg.skip=true`. Installed to `~/.m2`
+     as `0.9.10-SNAPSHOT`.
+2. **`kill(0, SIGKILL)` anti-emu trap → FIXED.** A ctor calls `kill(0,9)` (never returns on
+   real Linux); unidbg returned 0 → fell through into dead bytes → `UC_ERR_INSN_INVALID`.
+   Patched `AndroidSyscallHandler.kill()` to throw when `sig==9` w/ no handler.
+3. **Debugger deadlock → FIXED.** No SLF4J binding ⇒ NOP logger `isWarnEnabled()`=false ⇒
+   `handleEmuException` took the interactive-debugger branch, blocking on `Scanner.nextLine()`.
+   Added `slf4j-simple:2.0.16` to harness pom (INFO level routes exceptions to `log.warn`).
+   Also: always launch with `</dev/null` + `timeout` so it can never block on stdin.
+
+**THE 4th BLOCKER (ijiami anti-tamper — genuine RE, not a unidbg limit):**
+With all 3 fixes, `JNI_OnLoad` runs: it's a thunk → real fn that calls `(*vm)->GetEnv(...)`,
+then derefs a GOT-cached singleton (`GOT@0x12082340 → 0x120868e0 → NULL`) and calls vtable
+slot `+0x40` → null-deref → returns `0xffffffff`. A ctor at `.so`-relative **`0x3a1d8`** does
+an obfuscated integrity check: reads that singleton's fields, `getpid()` (raw `svc`, `r7=0x14`),
+opaque-predicate integer arithmetic vs a threshold, opens `/proc/self/status`, hits the `kill`
+trap. The singleton's real init appears gated behind this check passing cleanly in a genuine
+(non-emulated) process. App DEX NOT decrypted yet (mem-scan `/tmp/apkx/mem_scan2.bin` shows
+only the same 156B/280B stub fragments).
+
+**RECOMMENDED NEXT STEP:** in the harness add `hook_add(UC_HOOK_MEM_WRITE)` watching address
+`0x120868e0` — catch whoever is *supposed* to allocate/populate the singleton, identify the
+gating condition, and stub `/proc/self/status` + getpid + the opaque predicate so the check
+passes. Then JNI_OnLoad completes → RegisterNatives → call the `.dat` decrypt native → app DEX
+→ jadx → `startPlayLive`. Reusable tool: `~/xtv-ghidra/scripts/scan2_disasm.py` (thumb-aware
+capstone disasm vs the mem-scan). Run logs `run3.log`–`run6.log` show the full progression.
+
 ## Two tracks (either one unblocks us)
 
 ### Track A — Capture plaintext portalCore by defeating cert pinning (fastest)

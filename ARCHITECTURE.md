@@ -80,6 +80,41 @@ Next `d` is NOT in Set-Cookie or playlist body — it comes from the pinned port
 - ❌ Playlist without d → 404
 - ❌ Playlist refetch (consumed d) → 409
 
+## Refined model — flow re-analysis (2026-07-26 session 2)
+
+Re-parsed the retained captures (`/tmp/xtvtr.flow` 2.3 MB, `/tmp/xtvcap.flow` 19 KB
+on `.40`) with proper mitmproxy readers (`scratchpad/parse_*.py`). Corrections to
+the model above:
+
+- **`s`/`t` are STABLE session cookies** (constant across all playlist fetches);
+  **`d` is a ~1200-char token with a stable ~1000-char prefix + a ROTATING
+  ~200-char tail**; and **the playlist PATH also rotates every fetch**. So each
+  ~4 s cycle needs a fresh `(path, d-tail)` pair — `d` is NOT purely one-time,
+  its prefix persists for the session.
+- **The next `(path, d-tail)` is NOT in any plaintext response** — cdsr playlist
+  responses carry no Set-Cookie and only segment lines. The rotation source is
+  the cert-pinned streaming API (unobserved).
+- **The DarkDex "portalCore hosts" are mostly ancillary plaintext services**, not
+  the streaming API:
+  - `yvhcn.hxjebagrv.com` → ad server `POST /api/adserver/v3/get_content`
+    (plain JSON: `ad_version, apk_versioncode, channel, os_version, pkg,
+    platform, sn, user_id, ...`)
+  - `zxiws.tcgwhnvym.com` / `nxiqj.jgrqyxupl.com` → `GET /notice/api/get_notice`
+  - `vgwbm.uwfyobivh.com` / `rokbd.ysrkwctjg.com` → `GET /epg/v2/live/app/...`
+  - `iyut.xgw3sdzoac.com` → `GET /MarketServer/update`
+  - `sgyc.bfj1k2g4v.com` → **plaintext `ws://` websocket** `/v1/imagine`
+    (HTTP 101 upgrade, ~28 s heartbeat; no data frames persisted in capture)
+  - `23.94.64.155:30822` (the value in `XuperConfig.apiHost`) → **dead, 404**
+- **The real streaming-seed API (espjey.ysnihrwtg.com family) never appears in
+  any capture** — genuinely cert-pinned HTTPS, unobservable via MITM. We have no
+  path / body / confirmed host / port for it.
+
+Implication: a blind probe can't target an API we've never observed. The only
+plaintext lead left is a **cold-start MITM** (proxy up before launch) to see if
+the seed call at channel-open rides 80/443 unpinned. If it too is pinned, the
+seed can only come from in-process observation (frida SSL-unpin / DEX), which is
+blocked on this box (no Magisk → no LSPosed; ijiami anti-frida blocks frida spawn).
+
 ## THE REMAINING BLOCKER
 
 Continuous live playback needs a fresh (path, d) for every ~24s window.
