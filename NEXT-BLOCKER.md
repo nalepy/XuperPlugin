@@ -240,6 +240,60 @@ NEXT (do first next session): validate by calling getAuthInfo against a candidat
 (deploy plugin or a standalone 3DES client). A 200 + parseable `data` proves envelope+3DES+
 host all correct; then wire getColumnContents → getLiveData(channelId) → M3uProxyServer.
 
+## ⭐⭐⭐⭐ LIVE VALIDATION (session 6c, 23:00) — request mechanism PROVEN; new blocker = version-gate
+Replicated the whole portalCore call end-to-end with openssl+curl (no plugin deploy).
+**The entire request mechanism is confirmed correct** against real portalCore servers:
+
+- **openssl pipeline matches XuperCrypto byte-for-byte** (round-trip verified):
+  ```
+  KEYHEX=d9be3de1ee77ef9e9cebae1cd9fe38e3ae76e39ef7df9ef6   # =Base64-decode("2b494e53756c664c2f44465245733572")
+  ENC:  printf '%s' "$json" | openssl enc -e -des-ede3-ecb -K $KEYHEX | base64 -w0 | xxd -p | tr -d '\n'
+  DEC:  printf '%s' "$wire" | xxd -r -p | base64 -d | openssl enc -d -des-ede3-ecb -K $KEYHEX
+  ```
+- POST to real portalCore hosts → **HTTP 200 with valid portalCore JSON**. Host ✓, path ✓
+  (`/api/portalCore/v9/getAuthInfo` etc, PLAINTEXT path), 3DES body ✓, envelope ✓.
+- Live portalCore hosts that answer (CF-fronted): `espjey.ysnihrwtg.com`,
+  `sxowvd.jzvqwcyor.com`, `yrqucu.czxenpyba.com`, `dfcsq.divqohamz.com`, `fuxok.nguvmqhpk.com`,
+  `mptec.dhkrxuzcy.com`. (Use curl `--doh-url https://1.1.1.1/dns-query` — the app resolves
+  via DNS-over-HTTPS; some hosts won't resolve on a normal LAN resolver.)
+
+**THE NEW BLOCKER — server-side version gate:**
+Every reachable portalCore host + EVERY endpoint (getAuthInfo/getSlbInfo/getLiveData/
+getColumnContents) returns:
+```
+{"returnCode":"portal200001","errorMessage":"版本已停止使用"}   (= "this version is discontinued")
+```
+- Bumping `apkVersion`/`apkVer` (43405→99999) does NOT bypass it → not a simple min-version check.
+- The DEVICE app (same apkVersion 43405, same portalCode=masnew, same userToken) streams fine
+  RIGHT NOW → it re-calls getLiveData per channel and passes. So the device sends something we
+  don't. Candidates: (a) a signed header the NATIVE http layer injects (not in the logged
+  request wrapper, which only showed apkVer/spkgVer/apk); (b) the `b29`/`reserve1` blobs are
+  decrypted server-side and carry a version/nonce the server validates; (c) the device uses a
+  CURRENT host outside this deprecated pool (all our hosts came from an older list).
+
+**KEY CONTEXT (from operator): the 43405 APK is a forced-update-BYPASS build.**
+XTV normally forces a mandatory update periodically or stops working; this specific 4.34.5
+build sidesteps that and still works today (likely to be server-banned eventually). So the
+`版本已停止使用` we get is REAL — the server version-blocks 43405 — and THIS APK defeats that
+gate somehow. Our vanilla curl lacks the bypass. Two hypotheses:
+1. **client-side bypass** — app ignores the server's "discontinued" reply and runs on a
+   cached long-lived `userToken` + signed playlist URLs (valid until `expired`, ~days).
+   Would explain "still works" but implies eventual death on token expiry / hard ban.
+2. **request-side bypass** — the patch alters a field/header (spoofed version signature,
+   patched `b29`/`reserve1`, or a bypass flag) so the server accepts the old version.
+⇒ The real target for next session is **what this APK's update-bypass patch does**, not just
+the current host. jadx the decrypted DEX (now dumpable — app is stable/vendor-signed) and grep
+the version-check / update-gate logic; compare the on-wire request to our vanilla one.
+
+**NEXT STEP (decisive) — diff the device's real request vs ours:**
+`tcpdump` on `.4` (root) while the app opens a channel; read the **TLS SNI** (plaintext in
+ClientHello even though the body is pinned) to get the CURRENT portalCore host, and capture
+the FULL header/field set the native layer sends. Whatever differs from our request is the
+version-gate key. Tooling: `adb push` a static `tcpdump` arm binary, `tcpdump -i any -s0 -w
+/sdcard/x.pcap`, pull, read SNI with `tshark -Y 'tls.handshake.extensions_server_name'`.
+Alternative: hook the native `getSign`/header-builder with the (now-viable) Florida frida on
+the stable vendor app.
+
 ## Phase 1 — bootstrap host + getSlbInfo  → `XuperApiClient.getSlbInfo()`
 - Bootstrap portalCore host: the DES-encrypted `domain|DES` config in `assets/` OR the known
   rotating list (`espjey.ysnihrwtg.com`, `sxowvd.jzvqwcyor.com`, `yrqucu.czxenpyba.com`, …).
