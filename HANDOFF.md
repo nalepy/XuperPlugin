@@ -5,11 +5,18 @@ For the next agent continuing XuperPlugin. Read [README.md](README.md),
 
 ## TL;DR (updated 2026-07-26 ~02:00)
 
-> ⭐ **SESSION 6 BREAKTHROUGH (21:30) — READ `NEXT-BLOCKER.md` TOP SECTION FIRST.**
+> ⭐ **SESSION 6 BREAKTHROUGH (21:30) — READ `NEXT-BLOCKER.md` TOP SECTIONS FIRST.**
 > The on-device "crash loop / instability" was ijiami **self-SIGKILLing a debug-re-signed
 > APK**. Install the **vendor-signed `XTV_4.34.5.apk`** (cert `CN=sgm sgmtv`) → app is
 > STABLE, DEX decrypts in memory, root `/proc/mem` dump works. Never install a re-signed
 > APK on `.4` again. Login save/restore: `save_session.sh` / `restore_session.sh` on Win11.
+>
+> ✅ **REVERSING COMPLETE (session 6b).** Full live pipeline recovered from heap dumps:
+> getAuthInfo(v9) → getLiveData(v6) → signed CDN playlist URL (cdsr/bmagon/yuwc via
+> getSlbInfo v15) → open magloud segments. Tokens are SERVER-signed (`sign_type=cfl/cs`,
+> not client-forgeable) → must call getLiveData to refresh. **Next session = pure Kotlin
+> implementation** against the spec in `NEXT-BLOCKER.md` → "🔨 IMPLEMENTATION PLAN".
+> Captured evidence: `_session/heap_live.bin` (logged-in+streaming), `heap1.bin` (visitor).
 
 - **DEX dump failed** — ijiami v4 wipes DEX headers in memory. BlackDex (hung),
   DarkDex (0 dex, 1249 URLs + 12 classes extracted), memory dump (no DEX magic).

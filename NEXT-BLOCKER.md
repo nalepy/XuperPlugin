@@ -147,12 +147,88 @@ forge these URLs.** Continuous live MUST fetch fresh signed URLs from getAuthInf
 - `session_id` + `auth_id=<userId>_com.android.msandroid__0` come from **getAuthInfo**,
   then feed **getLiveData** which returns the fully-signed playlist URL.
 
-### Remaining work (implementation, not reversing)
-1. Implement the auth→playlist call chain in `XuperApiClient`: **getAuthInfo** (→ session_id,
-   auth_id) → **getLiveData** (→ signed `cdsr /v3/youshi/` URL + per-channel license). Both
-   are portalCore endpoints on the DES-resolved host (from getSlbInfo). Body is 3DES via
-   `XuperCrypto` (key `2b494e53…`); carries the logged-in `verification_token` (config.xml).
-   token is NOT recomputable client-side — it MUST come from getLiveData (proven above).
+---
+
+# 🔨 IMPLEMENTATION PLAN — next session (pure Kotlin; spec is KNOWN, no more reversing)
+
+All reversing is done. What follows is a build spec against `XuperApiClient.kt`. Existing
+infra to reuse (already in the file): `postJson(host, logicalPath, body, encrypt=true)`
+(3DES via `XuperCrypto.encryptBody`/`decryptBody`), `portalUrl()`, `requestBuilder()`
+(adds `Cookie` when `isSessionReady()`), `config` (userId, portalCode, cookieD/S/T, email,
+password, streamUserKey, cdnMain/Backup). Pattern to copy: `requestSnToken()`.
+
+## Confirmed facts (from heap_live.bin, logged-in + streaming)
+- **portalCore paths are PLAINTEXT** on the wire (`/api/portalCore/v9/getAuthInfo` seen
+  verbatim). Only the BODY is 3DES. So `postJson` as-is should work; no path encryption.
+- Endpoints (all POST, portalCore host): `v15/getSlbInfo`, `v9/getAuthInfo`,
+  `v6/getLiveData`, `v3/getColumnContents`, `device/updateOrInsert`, `getFavorite`.
+- **getSlbInfo REQUEST template** (this is the SLB call — note empty session_id/host):
+  ```
+  tag=slb&link=icdn&sign_type=cs&app_id=com.android.msandroid&app_ver=43405
+   &user_id=169355704&session_id=&auth_id=169355704_com.android.msandroid__0
+   &host=&client_ip=181.94.226.128&expired=1785128816&token=<MD5>
+  ```
+- **getLiveData RESPONSE = a LIST of pre-signed CDN addresses** (`liveAddressList`), one per
+  provider, each a full query string with its own server-signed `token`:
+  | link | sign_type | example main_addr |
+  |------|-----------|-------------------|
+  | cf | cfl | cdsr.higoesutn.com/v3/youshi/, yuwc.swzablvpm.com |
+  | akamai | cfl | bmagon.sxcrwendu.com/v3/youshi/ |
+  | icdn | cs | 34fhwevf.cbcf4gg3f.com, qimg.83xkvhlta.com (spared_addr on cloudfront) |
+  | google | goog | mygd.ihfjsrkdw.com |
+  Each carries `group=<64hex>` (entitlement), `ctrl_type=account`, `expired`, `client_ip`.
+  Player picks one; we prefer whichever segments are open (magloud) — `M3uProxyServer` handles it.
+
+## Phase 0 — mine exact REQUEST bodies (offline, no device) — DO FIRST
+The wire bodies are 3DES-encrypted, but the PLAINTEXT request JSON is in the heap before
+encryption. Grep `_session/heap_live.bin` for the getAuthInfo/getLiveData request objects:
+```
+strings -n 6 heap_live.bin | grep -aiE 'GetAuthInfoBean|GetLiveDataBean|"channelID"|"columnId"|"portalCode"|"userToken"|"liveType"|"portalCodeList"'
+```
+Goal: exact field names + JSON shape for each request body. (Known so far: getLiveData
+carries channelID, columnId, portalCode, userToken, liveType; getAuthInfo carries the
+account/verification_token.) Also confirm which call the s/t cookies vs `verification_token`
+authenticate.
+
+## Phase 1 — bootstrap host + getSlbInfo  → `XuperApiClient.getSlbInfo()`
+- Bootstrap portalCore host: the DES-encrypted `domain|DES` config in `assets/` OR the known
+  rotating list (`espjey.ysnihrwtg.com`, `sxowvd.jzvqwcyor.com`, `yrqucu.czxenpyba.com`, …).
+  Decrypt `domain|DES` with `XuperCrypto` (3DES key `2b494e53…`) to get the first host.
+- `postJson(host, "/api/portalCore/v15/getSlbInfo", body, encrypt=true)`; parse
+  `GetSlbInfoBeanResultData` → the serving portalCore host(s).
+
+## Phase 2 — getAuthInfo  → `XuperApiClient.getAuthInfo()`
+- `postJson(host, "/api/portalCore/v9/getAuthInfo", body, encrypt=true)`.
+- Parse `GetAuthInfoResultData` → **session_id**, **auth_id** (`<userId>_com.android.msandroid__0`),
+  entitlement/token. Stash in `config`.
+
+## Phase 3 — getLiveData  → `XuperApiClient.getLiveData(channelId)`
+- Body: `{channelID, columnId, portalCode, userToken, liveType}` (confirm names in Phase 0).
+- `postJson(host, "/api/portalCore/v6/getLiveData", body, encrypt=true)`.
+- Parse `GetLiveDataResultData.liveAddressList[]` → pick an address (prefer one whose
+  segments are open). Each entry is the full signed playlist URL (`playCode`).
+
+## Phase 4 — wire to M3uProxyServer
+- Hand the chosen signed playlist URL to `M3uProxyServer` (already fetches the m3u8 + passes
+  open magloud segments). Map channels via `getColumnContents` (v3) if a channel list is needed.
+
+## Phase 5 — refresh loop
+- Tokens expire (`expired` epoch; playlist ~hours, license ~7d). Re-call getLiveData each
+  cycle (or on 403) to refresh the signed URL. No client-side token computation — proven
+  server-signed (`sign_type=cfl/cs/goog`, server salt).
+
+## Verify at each phase
+Our OkHttp has NO cert pinning → we CAN call the pinned portalCore hosts. Log each response
+and diff against the real responses in `heap_live.bin`. If a call returns 401/409, the
+`verification_token`/cookies are the auth gap → re-check Phase 0.
+
+## Open questions (resolve during impl)
+1. Exact request-body field names/order for getAuthInfo + getLiveData (Phase 0 grep).
+2. Bootstrap host source: DES `domain|DES` config vs hardcoded rotating list.
+3. Does getAuthInfo need the `verification_token` (config.xml), the s/t cookies, or both?
+4. getSlbInfo `token` in its own request is server-signed too — can we get away WITHOUT
+   getSlbInfo by using a known-good portalCore host directly? (Test: skip SLB, call
+   getAuthInfo on a decrypted `domain|DES` host.)
 2. If token must come from getLiveData: implement the portalCore `getLiveData` call
    (DES host from getSlbInfo, body fields channelID/columnId/portalCode/userToken/liveType,
    3DES via XuperCrypto). Refresh loop each cycle → continuous live.
