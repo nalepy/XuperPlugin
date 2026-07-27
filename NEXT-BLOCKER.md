@@ -12,6 +12,121 @@ exact request: host, path, headers, and the 3DES-encrypted body fields.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full stream pipeline.
 
+---
+
+# ⭐ SESSION 6 — BREAKTHROUGH (2026-07-26 ~21:30 PST): the "instability" was self-inflicted
+
+**READ THIS FIRST. It corrects 5 sessions of wrong diagnosis.**
+
+## Root cause of the on-device "crash loop" — FOUND
+The app was NOT unstable. It was **SIGKILLing itself every ~200ms** because the
+installed APK (`XTV_gadget_v11.apk`) was **re-signed with the Android debug keystore**
+(`CN=Android Debug`) for frida-gadget injection. ijiami v4's native anti-tamper reads
+the APK signature at load, sees it is not the vendor cert, and `kill`s its own process.
+
+logcat proof (pristine vs tampered):
+```
+Zygote: Process NNNNN exited due to signal 9 (Killed)   # right after loading libexec.so
+```
+signal 9 = SIGKILL, no tombstone, no SIGSEGV — a deliberate self-kill, not a crash.
+
+**Vendor cert (REQUIRED for the app to run):**
+- `Owner: CN=sgm, OU=sgmtv, O=sgmtv`  SHA1 `7F:B3:0E:14:94:75:B4:11:65:81:A3:95:E9:07:65:0B:C5:70:F6:64`
+- Pristine vendor-signed APKs on Win11: `XTV_4.34.5.apk`, `XTV_clean.apk`, `installed_base.apk`
+  (all exactly 35,272,343 bytes). **`XTV_aligned.apk` = `CN=Fake` re-sign — DO NOT USE.**
+
+## Why this killed EVERY on-device track
+frida-gadget / BlackDex / ptrace all failed for the SAME upstream reason, not their own:
+- **frida-gadget** requires modifying the APK → re-sign → SIGKILL. Dead on arrival.
+- **frida-server / ptrace / BlackDex** were tested against the re-signed crash-looping
+  app → process suicides in 200ms → "TimedOutError" / "0 bytes read". Not anti-frida.
+
+## THE FIX (done)
+```
+adb -s 192.168.100.4:5555 uninstall com.android.mgstv
+adb -s 192.168.100.4:5555 install -r XTV_4.34.5.apk    # vendor-signed
+adb -s 192.168.100.4:5555 shell monkey -p com.android.mgstv -c android.intent.category.LAUNCHER 1
+```
+Result: **app boots, renders WelcomeActivity, process STAYS ALIVE (stable, state S).**
+Genuine signature → anti-tamper passes → **DEX decrypts in memory** → the anti-tamper
+singleton that dead-locked the off-device unidbg emulator (`0x120868e0`) populates
+NORMALLY here. Root `/proc/PID/mem` reads now succeed (process no longer dies mid-read).
+
+## Current on-device path (in progress)
+- App stable, pid resident. Memory-scanned all readable regions of the live process.
+- `startPlayLive` NOT in cleartext (either string-encrypted on-demand, or the live code
+  path not yet reached in visitor mode).
+- **KEYWORD HITS in dalvik heap `0x12c00000-0x14580000` (92×** `portalCore|liveAddressList|playCode|brasiliptv|snToken`**)** — the networking-layer
+  strings ARE resident as live Java String objects. Next: carve that region, read the
+  real `portalCore/vN/...` paths + body fields with `strings`+context.
+- On-device scan pattern that WORKS: `setsid sh script` run inside an **attached** adb
+  shell (Bash run_in_background). A one-shot `adb shell "nohup ... &"` gets REAPED by
+  adbd when the session closes — the child dies. Keep the adb shell attached.
+- WARNING: `busybox grep -a -b -o $'dex\n035'` over big regions HANGS (pathological on
+  binary). Don't full-scan all regions with `-o`. Carve the KW region directly + `strings`.
+
+## ⭐⭐ FINDINGS — API format recovered from live heap (session 6, 21:52)
+Carved dalvik heap `0x12c00000-0x14580000` (26 MB, pulled to
+`_session/heap1.bin`), ran `strings`+grep. The endpoint is **NOT** `startPlayLive` — the
+real live-playlist call is **`getLiveData`**. All portalCore endpoints resident in cleartext:
+
+| purpose | endpoint (path) |
+|---|---|
+| **LIVE PLAYLIST (the goal)** | `api/portalCore/v6/getLiveData` |
+| auth / entitlement | `api/portalCore/v9/getAuthInfo` |
+| server-load-balance (host discovery) | `api/portalCore/v15/getSlbInfo` |
+| others | `api/portalCore/getFavorite`, `.../device/updateOrInsert`, `.../checkForceBind`, `.../bindEmailGiftDays` |
+
+- **getLiveData request fields** (from bean setters in heap): `channelID` (a.k.a.
+  `setChannels`), `columnId`, `portalCode`, `userToken` (`setUserToken`), `userId`
+  (`setUserId`), `liveType`.
+- **Response chain:** `core.request.result.GetLiveDataResultData` → `liveAddressList`
+  → `core.request.result.LiveAddress` → `playCode` (the playable URL/code).
+- Auth beans: `GetAuthInfoBean` → `GetAuthInfoResult` → `GetAuthInfoResultData`.
+- **portalCore HOST is DES-encrypted**, not cleartext. Config carries `"domain|DES"`
+  values (e.g. notice host = base64 `Sz0JjjU4YRgGRpH1paF7wlkgQ43Df/4y`), decrypted with
+  the 3DES key in `XuperCrypto.kt` (`2b494e53…`). The serving portalCore host is chosen
+  at runtime via `getSlbInfo`. Code path shows `baseUrl == null` guard.
+- EPG template: `{protocol}://{ip}/epg/v2/live/app/utc{timezone}/{liveType}`.
+- Plaintext ancillary (already known, NOT the seed): `notice/api/get_notice` on
+  `nxiqj.jgrqyxupl.com` / `zxiws.tcgwhnvym.com`; portal assets on `sfgknh.qho3cnsyil.com`.
+
+**What's still needed (next step):** the assembled full URL + exact JSON body only exist
+in memory AFTER the app makes the call. In visitor mode parked on WelcomeActivity it
+hasn't fired getLiveData yet. So: **log in (`nestor.ale@gmail.com`/`Ian20jesus`) → open a
+live channel → re-carve the heap.** That materializes `https://<slb-host>/api/portalCore/
+v6/getLiveData` + the encrypted request body + a fresh `userToken`, all at once. Then
+decrypt the body with `XuperCrypto` to read exact field values, and replicate in
+`XuperApiClient.getLiveData()` (rename from the placeholder `startPlayLive`).
+
+## Preferred long-term capture: frida-SERVER (not gadget)
+Since the killer is the SIGNATURE, attach to the UNMODIFIED vendor APK with frida-SERVER
+(separate root process, no APK mod → no re-sign → no SIGKILL). Defeat ijiami runtime
+anti-frida with a **de-signatured frida fork (Florida `Ylarod/Florida`, or hluda)** —
+all `frida`/`gum-js-loop`/`gmain`/port-27042/D-Bus strings randomized. Cross-compile for
+arm SDK29, run as root, attach to genuine app. First time both preconditions hold at once
+(stable genuine app + invisible agent) — real shot where every prior session failed.
+
+## Session save/restore (login survives reinstall)
+Login lives in `/data/data/com.android.mgstv` and is wiped by uninstall. Root scripts on
+Win11 at `C:/Users/Nestor/Workspace/Xuper/`:
+- **`save_session.sh`** — run AFTER logging in. force-stops app, `tar czf` the data dir,
+  pulls to `_session/com.android.mgstv_data.tar.gz`.
+- **`restore_session.sh`** — after reinstalling the VENDOR APK, pushes+extracts the tar,
+  then **chowns to the CURRENT app uid + `restorecon`** (uid changes every install — this
+  step is mandatory or the app can't read its own files).
+
+Flow: install `XTV_4.34.5.apk` → login (`nestor.ale@gmail.com` / `Ian20jesus`) →
+`save_session.sh` → any future reinstall: install vendor APK → `restore_session.sh` → done.
+(frida-server route never reinstalls → login never wipes; save/restore is the safety net.)
+
+## MSYS path gotcha (bit us repeatedly this session)
+Git Bash rewrites `adb` remote args like `/data/local/tmp/x` into
+`C:/Program Files/Git/data/...`. Prefix the command with `MSYS_NO_PATHCONV=1` (and push
+local files using a Windows `C:/...` path), or the push/shell silently targets the wrong path.
+
+---
+
 ## Why plain jadx won't work (confirmed 2026-07-26)
 
 The APK is **ijiami-packed** (v4). Outer `classes.dex` is a 14 KB stub with 4 classes
