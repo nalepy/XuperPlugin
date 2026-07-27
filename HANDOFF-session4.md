@@ -67,7 +67,18 @@ python zip_inject.py  →  XTV_gadget_v3.apk  →  jarsigner  →  adb install
 
 **v3 is the working baseline.** App stays alive with gadget loaded. Likely because script file is SELinux-blocked (can't read from `/data/local/tmp/`), so gadget stays dormant — doesn't trigger ijiami detection but also doesn't hook anything.
 
-**Next session fix:** Use `/sdcard/hook.js` (SELinux permissive) or embed script as APK asset. Or use listen+**wait** mode — pauses app until frida connects, frida can inject hooks before app resumes and ijiami checks run.
+**Frida-gadget 16.5.9 (v11):** Same failure as 17.9.1. Gadget opens TCP port, app survives listen+wait mode (state R), but frida attach kills process during protocol handshake. Version mismatch ruled out — 16→16 and 17→17 both fail identically. Root cause: Android 10 kills gadget process during protocol negotiation (likely ANR timeout on blocked process).
+
+**Ptrace memory dump (session5-part6):**
+- App with clean XTV_clean.apk shows UI (DEX decrypts) but crashes/restarts every 3-5s
+- Live `/proc/PID/mem` reads fail: process dies mid-dump (0 bytes returned)
+- App instability worsens with each reinstall — clearing app data helps (~15s survival)
+- Dalvik-main space (512MB) scanned: zero app class descriptors found
+- Custom ijiami ClassLoader (`N.al`) stores DEX outside standard dalvik regions
+- Two anonymous exec regions found (28KB + 380KB) — latter matches libexec.so size
+- **Blocked**: Need compiled ARM ptrace binary to freeze process during dump
+
+**Next session fix:** Compile static ARM binary using `PTRACE_ATTACH` → read `/proc/PID/maps` → `PTRACE_PEEKDATA` all anonymous rw regions → search for DEX magic + `startPlayLive` strings → `PTRACE_DETACH`. Cross-compile with `arm-linux-gnueabi-gcc -static` on `.40`.
 
 ## Off-device unidbg state
 - `~/xtv-ghidra/harness/src/main/java/com/xtv/Unpack.java` — 27-iteration harness
