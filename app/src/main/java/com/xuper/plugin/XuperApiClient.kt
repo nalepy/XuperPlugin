@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -32,16 +33,38 @@ data class XuperConfig(
     val cookieD: String = "ca0e53edac957b8f6f187528933355f1",
     val cookieS: String = "QDtRcPPKDAwtROdnoGlxRgXpj64ElYpBBNH0TIZO20TIcc",
     val cookieT: String = "kzDQKAgQI3UlOy-bl3ScQrOcu3NIHFGAY5PZ6xuoZ3z",
-    val userId: String = "694951876",
-    val userToken: String = "",
-    val portalCode: String = "6e54356f76774c54574b303d",
+    val userId: String = "169355704",
+    val userToken: String = "42eebacb-1a56-46d4-8f8e-94ba32e5b99d",
+    // portalCode is the literal string "masnew" (captured from getAuthInfo request),
+    // NOT the old hex 6e54356f76774c54574b303d (that was a different/derived value).
+    val portalCode: String = "masnew",
     val streamUserKey: String = "cyx_93531158996778016",
     val cdnMain: String = "magloud.y6oseldsc.online",
     val cdnBackup: String = "caeo.wvdbozpfc.com",
     val email: String = "nestor.ale@gmail.com",
     val password: String = "Ian20jesus",
     val playlistPath: String = "",
-    val segmentPath: String = ""
+    val segmentPath: String = "",
+    // --- getAuthInfo/getLiveData request envelope (captured device fields, V76PRO) ---
+    val appId: String = "com.android.msandroid",
+    val apkVersion: String = "43405",
+    val appLanguage: String = "es",
+    val model: String = "V76PRO",
+    val product: String = "walley",
+    val cpu: String = "armeabi-v7a",
+    val hardwareInfo: String = "sun50iw9p1",
+    val sysVersion: String = "2024-11-15 19:08:51_29_14.1_4.9.170",
+    val sdkVer: Int = 29,
+    val loginType: String = "2",
+    val sn: String = "ca0e53edac957b8f6f187528933355f1",
+    // b29 / reserve1 = captured base64-in-hex device blobs. Reused as-is with a saved
+    // session; regeneration (if the server rotates them) is a later concern.
+    val b29: String = "4f6f786b4b5a7a3933666842554e6c55717338584b71325a3635436b4e463736583442714b345572434a504c556e72384136647252773d3d",
+    val reserve1: String = "76356c476568424f4a38334761645a697957757344673d3d",
+    // --- filled at runtime by getSlbInfo / getAuthInfo ---
+    val portalHost: String = "",
+    val sessionId: String = "",
+    val authId: String = ""
 )
 
 @Serializable
@@ -423,15 +446,90 @@ class XuperApiClient(context: Context) {
         }
     }
 
+    /**
+     * Common portalCore request envelope — the exact device-field set captured from the
+     * live getAuthInfo request (heap_live.bin). `extra` merges call-specific fields on top.
+     */
+    private fun envelope(extra: JsonObjectBuilder.() -> Unit = {}): String {
+        val c = config
+        return buildJsonObject {
+            put("apkVersion", c.apkVersion)
+            put("appId", c.appId)
+            put("appLanguage", c.appLanguage)
+            put("b29", c.b29)
+            put("contentType", "application/json;charset=utf-8")
+            put("cpu", c.cpu)
+            put("deviceToken", "")
+            put("hardwareInfo", c.hardwareInfo)
+            put("loginType", c.loginType)
+            put("model", c.model)
+            put("portalCode", c.portalCode)
+            put("product", c.product)
+            put("reserve1", c.reserve1)
+            put("sdkVer", c.sdkVer)
+            put("sn", c.sn)
+            put("sysVersion", c.sysVersion)
+            put("lang", c.appLanguage)
+            put("type", "1")
+            put("userId", c.userId)
+            put("userToken", c.userToken)
+            extra()
+        }.toString()
+    }
+
+    private fun portalHost(): String = config.portalHost.ifBlank { config.apiHost }
+
+    /**
+     * POST /api/portalCore/v15/getSlbInfo — resolves the serving portalCore host.
+     * Call first (bootstrap host = decrypted domain|DES config or a known rotating host).
+     */
+    fun getSlbInfo(): Result<String> {
+        val (code, resp) = postJson(portalHost(), "/api/portalCore/v15/getSlbInfo", envelope())
+        if (code <= 0) return Result.failure(IOException("network: $resp"))
+        if (resp.isNullOrBlank()) return Result.failure(IOException("HTTP $code empty (encrypt/path?)"))
+        return try {
+            val obj = json.parseToJsonElement(resp).jsonObject
+            val returnCode = obj["returnCode"]?.jsonPrimitive?.contentOrNull
+            val data = obj["data"]?.jsonObject
+            val host = data?.str("host") ?: data?.str("mainAddr") ?: data?.str("slbHost") ?: ""
+            if (host.isNotBlank()) config = config.copy(portalHost = host)
+            Result.success("HTTP $code returnCode=$returnCode host=$host raw=${resp.take(160)}")
+        } catch (e: Exception) {
+            Result.success("HTTP $code raw=${resp.take(200)}")
+        }
+    }
+
+    /**
+     * POST /api/portalCore/v9/getAuthInfo — bootstraps session_id + auth_id from the
+     * logged-in userToken. Body = the captured device envelope (3DES-wrapped by postJson).
+     */
+    fun getAuthInfo(): Result<String> {
+        val c = config
+        val (code, resp) = postJson(portalHost(), "/api/portalCore/v9/getAuthInfo", envelope())
+        if (code <= 0) return Result.failure(IOException("network: $resp"))
+        if (resp.isNullOrBlank()) return Result.failure(IOException("HTTP $code empty (encrypt/path?)"))
+        return try {
+            val obj = json.parseToJsonElement(resp).jsonObject
+            val returnCode = obj["returnCode"]?.jsonPrimitive?.contentOrNull
+            val data = obj["data"]?.jsonObject
+            val sessionId = data?.str("session_id") ?: data?.str("sessionId") ?: ""
+            val authId = data?.str("auth_id") ?: data?.str("authId")
+                ?: "${c.userId}_${c.appId}__0"
+            config = config.copy(sessionId = sessionId, authId = authId)
+            Result.success("HTTP $code returnCode=$returnCode session_id=$sessionId auth_id=$authId")
+        } catch (e: Exception) {
+            Result.success("HTTP $code raw=${resp.take(200)}")
+        }
+    }
+
     fun getLiveData(): Result<List<XuperChannel>> {
         val c = config
-        val body = buildJsonObject {
-            if (c.userId.isNotBlank()) put("userId", c.userId)
-            if (c.userToken.isNotBlank()) put("userToken", c.userToken)
-            if (c.portalCode.isNotBlank()) put("portalCode", c.portalCode)
-        }.toString()
+        // Full envelope + live-specific fields (channelID/columnId/liveType per captured beans).
+        val body = envelope {
+            put("liveType", "1")
+        }
 
-        val (code, resp) = postJson(c.apiHost, "/api/portalCore/v6/getLiveData", body)
+        val (code, resp) = postJson(portalHost(), "/api/portalCore/v6/getLiveData", body)
         if (code <= 0) return Result.failure(IOException("network: $resp"))
         if (resp.isNullOrBlank()) {
             // plain path likely blocked/encrypted — fall back to synthetic channel from known stream key

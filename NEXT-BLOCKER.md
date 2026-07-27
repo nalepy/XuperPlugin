@@ -179,7 +179,28 @@ password, streamUserKey, cdnMain/Backup). Pattern to copy: `requestSnToken()`.
   Each carries `group=<64hex>` (entitlement), `ctrl_type=account`, `expired`, `client_ip`.
   Player picks one; we prefer whichever segments are open (magloud) — `M3uProxyServer` handles it.
 
-## Phase 0 — mine exact REQUEST bodies (offline, no device) — DO FIRST
+## Phase 0 — DONE (22:45). Exact getAuthInfo request body captured:
+```json
+{"apkVersion":"43405","appId":"com.android.msandroid","appLanguage":"es",
+ "b29":"<hex(base64) device blob>","contentType":"application/json;charset=utf-8",
+ "cpu":"armeabi-v7a","deviceToken":"","hardwareInfo":"sun50iw9p1","loginType":"2",
+ "model":"V76PRO","portalCode":"masnew","product":"walley","reserve1":"<hex blob>",
+ "sdkVer":29,"sn":"ca0e53edac957b8f6f187528933355f1",
+ "sysVersion":"2024-11-15 19:08:51_29_14.1_4.9.170","lang":"es","type":"1",
+ "userId":"169355704","userToken":"42eebacb-1a56-46d4-8f8e-94ba32e5b99d"}
+```
+POST `/api/portalCore/v9/getAuthInfo`, extra headers `apkVer/spkgVer/apk`, body 3DES.
+CORRECTIONS baked into `XuperConfig`: `portalCode="masnew"` (not the old hex),
+`userToken="42eebacb-...b99d"` (login UUID), `userId="169355704"` (logged-in, not visitor).
+b29/reserve1 are captured device blobs, reused as-is (regen is a later concern).
+IMPLEMENTED in `XuperApiClient.kt` (compiles clean): `envelope()` builds this exact body;
+`getSlbInfo()` (v15), `getAuthInfo()` (v9), `getLiveData()` (v6) all send it via `postJson`
+(3DES). Runtime-filled config: `portalHost`, `sessionId`, `authId`.
+STILL TO CONFIRM (needs a live response): getLiveData's per-channel fields (channelID/
+columnId) + whether getLiveData returns a channel list or per-channel liveAddressList
+(getColumnContents v3 may be the list call). Run the calls on-device to see the response.
+
+## (reference) how Phase 0 was mined — offline, no device
 The wire bodies are 3DES-encrypted, but the PLAINTEXT request JSON is in the heap before
 encryption. Grep `_session/heap_live.bin` for the getAuthInfo/getLiveData request objects:
 ```
