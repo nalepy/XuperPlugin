@@ -313,6 +313,8 @@ proxy loop re-calls startPlayLive each cycle → continuous live, no manual capt
 
 **Root cause:** App is unstable on .4 after reboot — crashes and restarts rapidly. Without ptrace (PTRACE_ATTACH to freeze process), live memory reads fail because process dies during the dump.
 
+**Frida-gadget 16.5.9 results:** Same failure as 17.9.1 — gadget connects on TCP port but dies during frida protocol handshake. Version mismatch ruled out (16→16 and 17→17 both fail identically). Root cause: Android 10 kills gadget process during protocol negotiation (likely ANR timeout or SELinux restriction on thread creation in blocked process).
+
 **Next step:** Compile a static ARM binary that uses ptrace to:
 1. `PTRACE_ATTACH` to mgstv PID
 2. Read `/proc/PID/maps` to find all anonymous rw regions
