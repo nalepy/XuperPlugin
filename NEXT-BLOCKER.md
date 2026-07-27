@@ -211,6 +211,35 @@ carries channelID, columnId, portalCode, userToken, liveType; getAuthInfo carrie
 account/verification_token.) Also confirm which call the s/t cookies vs `verification_token`
 authenticate.
 
+## Session 6c progress (22:50) — code written, host + response shape still to validate
+IMPLEMENTED + compiles clean (`compileDebugKotlin` OK): `envelope()`, `getSlbInfo()`,
+`getAuthInfo()`, enriched `getLiveData()`; `XuperConfig` corrected (portalCode=masnew,
+real userToken UUID, userId 169355704, device envelope fields).
+
+Confirmed endpoint roles:
+- **getColumnContents (v3)** = the CHANNEL LIST (`GetColumnContentsResultData` →
+  `liveColumnList`/`childColumnList`/`channelList`/`channelListTotalSize`). ← implement next
+  as the list source (current `getLiveData()` channel-list parse really belongs here).
+- **getLiveData (v6)** = PER-CHANNEL playback (returns `program`+`medias[].license` for one
+  channel). Takes `channelID`. Refactor `getLiveData()` → `getLiveData(channelId)` returning
+  the signed playlist URL, once the request body is confirmed.
+
+Candidate portalCore/SLB API hosts (from heap; `apiHost` default 23.94.64.155:30822 is DEAD):
+`xsvs.evlslb.com`, `xsvs.vfltbr.com` (evl**slb**), `banamyi.vb1kivdlvc.com`. Try these as
+the bootstrap host for getSlbInfo/getAuthInfo.
+
+DEAD END (don't retry): `domain|DES` config blobs (`Sz0Jjj…`, etc.) do NOT decrypt with the
+body 3DES key (2b494e53…) under DESede/DES × ECB/CBC × key-variants — all garbage. That blob
+uses a different key/scheme. Skip it; use getSlbInfo + the candidate hosts instead.
+
+Crypto confirmed (XuperCrypto.kt): body = `toHex(Base64(DESede/ECB/PKCS5(plain)))`,
+key = Base64-decode("2b494e53756c664c2f44465245733572") = 24 bytes
+`d9be3de1ee77ef9e9cebae1cd9fe38e3ae76e39ef7df9ef6`. Paths PLAINTEXT (only body encrypted).
+
+NEXT (do first next session): validate by calling getAuthInfo against a candidate host
+(deploy plugin or a standalone 3DES client). A 200 + parseable `data` proves envelope+3DES+
+host all correct; then wire getColumnContents → getLiveData(channelId) → M3uProxyServer.
+
 ## Phase 1 — bootstrap host + getSlbInfo  → `XuperApiClient.getSlbInfo()`
 - Bootstrap portalCore host: the DES-encrypted `domain|DES` config in `assets/` OR the known
   rotating list (`espjey.ysnihrwtg.com`, `sxowvd.jzvqwcyor.com`, `yrqucu.czxenpyba.com`, …).
