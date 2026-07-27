@@ -299,6 +299,29 @@ proxy loop re-calls startPlayLive each cycle → continuous live, no manual capt
 - [ ] **DEX recovered** → `jadx` decompile → find `startPlayLive` endpoint + body format
 - [ ] **Implement** `XuperApiClient.startPlayLive()` → wire to `M3uProxyServer` → continuous live TV
 
+---
+
+# SESSION 5 — PTrace memory dump (2026-07-26 20:56)
+
+**Findings:**
+- App with clean XTV_clean.apk shows UI on screen (screenshot captured) — DEX decrypts successfully
+- Dalvik-main space (0x12c00000-0x32c00000): zero app class descriptors (`Lcom/interactive/...`) found in any region
+- Custom ijiami ClassLoader (`N.al`) loads DEX in-memory — NOT in standard dalvik regions
+- App cycles crash/restart every ~3-5 seconds — too fast for reliable /proc/PID/mem reads
+- Two anonymous executable regions found: 28KB + 380KB — latter matches libexec.so size
+- `/proc/PID/mem` reads return 0 bytes when process dies mid-read
+
+**Root cause:** App is unstable on .4 after reboot — crashes and restarts rapidly. Without ptrace (PTRACE_ATTACH to freeze process), live memory reads fail because process dies during the dump.
+
+**Next step:** Compile a static ARM binary that uses ptrace to:
+1. `PTRACE_ATTACH` to mgstv PID
+2. Read `/proc/PID/maps` to find all anonymous rw regions
+3. Read those regions via `PTRACE_PEEKDATA` or `/proc/PID/mem`
+4. Search for DEX magic + `startPlayLive` strings
+5. `PTRACE_DETACH`
+
+**Alternatively:** Install original working APK (pre-gadget) fresh, which might be more stable than current device state.
+
 ## Reference: what we already have
 
 - Session cookies `s`/`t` (44-char) captured; ~30 min lifetime. Re-capture via the
