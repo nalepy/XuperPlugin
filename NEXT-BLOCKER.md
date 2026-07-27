@@ -99,6 +99,54 @@ v6/getLiveData` + the encrypted request body + a fresh `userToken`, all at once.
 decrypt the body with `XuperCrypto` to read exact field values, and replicate in
 `XuperApiClient.getLiveData()` (rename from the placeholder `startPlayLive`).
 
+## ⭐⭐⭐ LIVE CAPTURE (session 6b, 22:07) — logged in + streaming → full chain recovered
+Logged in via the app UI (`nestor.ale@gmail.com`/`Ian20jesus`), opened a live channel,
+re-carved the dalvik heap while streaming (`_session/heap_live.bin`, 32 MB). Everything
+below is REAL captured data, not inferred:
+
+- **Logged-in account:** `user_id=169355704` (NOTE: the visitor id `694951876` is NOT the
+  account — logging in yields a DIFFERENT user_id used in the playlist call).
+- **Live playlist request (cdsr host, cleartext HTTP):**
+  ```
+  http://cdsr.higoesutn.com/v3/youshi/?media_encrypted=0&app_id=com.android.msandroid
+    &link=cf&user_id=169355704&sign_type=cfl&spared_addr=&client_ip=181.94.226.128
+    &expired=1785128816&tag=free&check_play_ip=true&token=73CF14BD52BB12FAA03797653F69245D
+  ```
+  This is the playlist URL `getLiveData` resolves to. `token` = 32-hex (MD5). It returns
+  the m3u8 whose segments live on the OPEN magloud CDN (no per-segment auth).
+- **Per-channel license (from getLiveData `program` JSON, one per channel):**
+  ```
+  app_id=com.android.msandroid&tag=free&scheme=md5-01&media_code=<MEDIA_CODE>
+    &expired=1785712153&token=<32-HEX-MD5>
+  ```
+  `media_code` examples: `cyx_vPeWHohcPR6vDG`, `cys_2088365543...`, `cyx-0038862747...`.
+  `scheme=md5-01` ⇒ token is an MD5 over (app_id, media_code, expired, tag, + a secret).
+- **Player `program` JSON shape:** `{"buss":"live","cause":"user","from":"channellist",
+  "media":"<code>","medias":[{"license":"<the license string>","quality":"480p",
+  "vcodec":"h265", ...}],"name":"<code>"}`.
+- The full pipeline is now proven end-to-end: **getLiveData (portalCore, DES host via
+  getSlbInfo) → per-channel license (md5-01) → `cdsr.higoesutn.com/v3/youshi/` playlist
+  URL+token → open magloud segments.** `M3uProxyServer` already handles the last hop.
+
+### Remaining work (implementation, not reversing)
+1. Reproduce the cdsr playlist request in `XuperApiClient` (host `cdsr.higoesutn.com`,
+   path `/v3/youshi/`, the query params above). Open question: is `token` recomputable
+   client-side (md5-01 over known fields + a static salt) or must it come from getLiveData?
+   Grep `heap_live.bin` for the salt / the getLiveData JSON that carries these tokens.
+2. If token must come from getLiveData: implement the portalCore `getLiveData` call
+   (DES host from getSlbInfo, body fields channelID/columnId/portalCode/userToken/liveType,
+   3DES via XuperCrypto). Refresh loop each cycle → continuous live.
+3. Tokens seen expire `expired=1785712153` (licenses) / `1785128816` (playlist) — Unix
+   epoch; short-lived, so the refresh call is required for continuous play.
+
+### Session save/restore — VALIDATED
+`save_session.sh` captured the logged-in `/data/data/com.android.mgstv` (4.8 MB tar,
+`_session/com.android.mgstv_data.tar.gz`). Login persists in `shared_prefs/config.xml`
+(`user_name`, `last_login_user_name`, `verification_token`, `user_password_new`,
+`portal_code`). Confirmed the app relaunches LOGGED IN (userId 169355704, not visitor).
+`restore_session.sh` reinstates it after any reinstall (auto uid-chown + restorecon).
+Captured heaps: `_session/heap1.bin` (visitor), `_session/heap_live.bin` (logged-in+streaming).
+
 ## Preferred long-term capture: frida-SERVER (not gadget)
 Since the killer is the SIGNATURE, attach to the UNMODIFIED vendor APK with frida-SERVER
 (separate root process, no APK mod → no re-sign → no SIGKILL). Defeat ijiami runtime
