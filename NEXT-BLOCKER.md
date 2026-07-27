@@ -128,11 +128,31 @@ below is REAL captured data, not inferred:
   getSlbInfo) → per-channel license (md5-01) → `cdsr.higoesutn.com/v3/youshi/` playlist
   URL+token → open magloud segments.** `M3uProxyServer` already handles the last hop.
 
+### TOKEN SIGNING — RESOLVED (session 6b hunt): server-side, NOT client-computable
+Tested 17 salt-less MD5 formulas against a known playlist token
+(`73cf14bd52bb12faa03797653f69245d`) — ZERO matches. The full signed request is:
+```
+session_id=0EbrXbdNgoP&app_ver=43405&auth_id=169355704_com.android.msandroid__0
+ &dev_id=933355f1&main_addr=http://cdsr.higoesutn.com/v3/youshi/&media_encrypted=0
+ &app_id=com.android.msandroid&link=cf&user_id=169355704&sign_type=cfl&spared_addr=
+ &client_ip=181.94.226.128&expired=1785128816&tag=free&check_play_ip=true&token=<MD5>
+```
+`sign_type=cfl` signs (session_id, auth_id, main_addr, link, tag, user_id, expired,
+client_ip, …) with a SERVER-HELD salt. Proof it's server-side: `session_id` is a
+server-issued random (changes per request) yet is part of the signed input, and `tag=free`
+vs `tag=short` / `link=cf` vs `link=akamai` each flip the token. ⇒ **the client cannot
+forge these URLs.** Continuous live MUST fetch fresh signed URLs from getAuthInfo/getLiveData.
+- 3 CDN hosts rotate via getSlbInfo: `cdsr.higoesutn.com`, `bmagon.sxcrwendu.com`,
+  `yuwc.swzablvpm.com`. `link=cf` (Cloudflare) | `link=akamai`.
+- `session_id` + `auth_id=<userId>_com.android.msandroid__0` come from **getAuthInfo**,
+  then feed **getLiveData** which returns the fully-signed playlist URL.
+
 ### Remaining work (implementation, not reversing)
-1. Reproduce the cdsr playlist request in `XuperApiClient` (host `cdsr.higoesutn.com`,
-   path `/v3/youshi/`, the query params above). Open question: is `token` recomputable
-   client-side (md5-01 over known fields + a static salt) or must it come from getLiveData?
-   Grep `heap_live.bin` for the salt / the getLiveData JSON that carries these tokens.
+1. Implement the auth→playlist call chain in `XuperApiClient`: **getAuthInfo** (→ session_id,
+   auth_id) → **getLiveData** (→ signed `cdsr /v3/youshi/` URL + per-channel license). Both
+   are portalCore endpoints on the DES-resolved host (from getSlbInfo). Body is 3DES via
+   `XuperCrypto` (key `2b494e53…`); carries the logged-in `verification_token` (config.xml).
+   token is NOT recomputable client-side — it MUST come from getLiveData (proven above).
 2. If token must come from getLiveData: implement the portalCore `getLiveData` call
    (DES host from getSlbInfo, body fields channelID/columnId/portalCode/userToken/liveType,
    3DES via XuperCrypto). Refresh loop each cycle → continuous live.
