@@ -73,6 +73,41 @@ Next `d` is NOT in Set-Cookie or playlist body — it comes from the pinned port
 - Update: `iyut.xgw3sdzoac.com/MarketServer/update?action=checkUpdate`
 - GeoIP: `ip-api.com/json/`
 
+## Wire capture update (2026-07-27, tcpdump on `.4`)
+
+### Session 7 — streaming (playback)
+
+While **live channels were playing**, root `tcpdump` (port 80/443) showed **TLS SNI**
+to `sfgknh.qho3cnsyil.com` and payload strings for `rokbd.ysrkwctjg.com`,
+`vgwbm.uwfyobivh.com`. These hosts were **not** in the old heap-only portalCore list
+(`espjey.ysnihrwtg.com`, …).
+
+### Session 10 — cold start + port 80 (bootstrap hunt)
+
+| Capture | Filter | Packets | Takeaway |
+|---------|--------|---------|----------|
+| `portal_cold.pcap` | tcp 80 or 443, 50s after force-stop + launch | 846 | New SNI `34fhwevf.cbcf4gg3f.com`; pool SNIs `sxowvd`, `emowvv`; HTTP Host on EPG/ad hosts |
+| `portal_switch.pcap` | tcp 443, channel keys only | 98 | No portal SNIs (analytics only) — **cold start required** |
+| `sgyc_port80.pcap` | tcp 80, 45s cold start | 141 | `sgyc` → WebSocket `/v1/imagine`; `ycout` → WS `/v1/ws/...` — **not portalCore** |
+
+Still **no** cleartext `POST …/api/portalCore/` in these pcaps → app likely uses **HTTPS**
+with **opaque encrypted path** (OkHttp interceptors) on the real DES-resolved host.
+
+| Observation | Detail |
+|-------------|--------|
+| Artifacts | `_session/portal_cold.pcap`, `portal_switch.pcap`, `sgyc_port80.pcap` |
+| Not in pcap | `magloud`, `cdsr`, `m3u8`, `portalCore` cleartext |
+| Plugin probe | 19 bootstrap hosts → **`portal200001`** or **403/404**; log tags **`[SYN]`** when only stream-key fallback channels |
+| `s`/`t` on device | not in `shared_prefs`; `cache.config.xml` has `key_user_id`, `KEY_SP_SN` (= `d` prefix) |
+
+Implication: the **portal API host pool in production shifts** (CF front domains). Wire
+discovery must separate **ancillary** hosts (WS, EPG, ads) from **portalCore**. Top TLS
+candidate from cold start: `34fhwevf.cbcf4gg3f.com` (404 on logical API path from plugin).
+Full session notes: [SESSION-2026-07-27.md](SESSION-2026-07-27.md).
+
+Analysis tools: `scripts/deep_analyze_pcap.py`; capture: `_session/capture_portal.sh`,
+`_session/capture_sgyc_port80.sh`.
+
 ## What works NOW (proven via curl with fresh cookies)
 
 - ✅ Playlist fetch with d/s/t → 200 + segment list
@@ -115,20 +150,22 @@ the seed call at channel-open rides 80/443 unpinned. If it too is pinned, the
 seed can only come from in-process observation (frida SSL-unpin / DEX), which is
 blocked on this box (no Magisk → no LSPosed; ijiami anti-frida blocks frida spawn).
 
-## THE REMAINING BLOCKER
+## THE REMAINING BLOCKER (updated 2026-07-27)
 
-Continuous live playback needs a fresh (path, d) for every ~24s window.
-Those come only from the **cert-pinned portalCore API**. To make XuperPlugin
-self-sustaining (no manual cookie paste), we must either:
+Continuous live playback needs fresh **server-signed** playlist URLs from portalCore
+(`getLiveData` chain — see [NEXT-BLOCKER.md](NEXT-BLOCKER.md)).
 
-1. **Reverse the portalCore startPlayLive request from the DEX** (jadx) and
-   replicate it in XuperApiClient (our OkHttp has no cert pinning, so we CAN
-   call the pinned hosts). This is the clean path.
-2. **Defeat cert pinning on the box** (frida) to observe the request — blocked
-   last session by ijiami anti-frida + multi-process fork.
+**Progress:** Kotlin client sends correct 3DES + envelope; Win11 reaches portal hosts.
+**Wire capture** identified **live** hostnames (`sfgknh`, `rokbd`, `vgwbm`) vs **old**
+heap pool (`espjey…` → `portal200001`).
 
-Path 1 is preferred. Need: exact host, path, encrypted request body format,
-and which session fields (userId, portalCode, s/t) the startPlayLive call needs.
+**Still blocked:**
+1. Plugin probes get **403** (live hosts) or **portal200001** / **400** (old pool + stale `s`/`t`).
+2. Fresh **`s`/`t` cookies** not in device prefs — MITM or Set-Cookie capture required.
+3. Kotlin: `getColumnContents`, per-channel `getLiveData`, proxy refresh loop not wired.
+
+Preferred path: refresh cookies → successful `getAuthInfo` → implement list/play in
+`XuperApiClient` (OkHttp has no pinning). Fallback: Frida on **vendor** APK for native headers.
 
 ## MITM capture method (WORKING — 2026-07-26)
 

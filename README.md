@@ -7,15 +7,12 @@ StreamVault) — no email registration, no VIP paywall, no forced updates.
 It authenticates against XTV's backend using captured session tokens, fetches the
 live playlist, and serves standard HLS locally via a built-in proxy.
 
-## Status — 2026-07-26
+## Status — 2026-07-27 (session 10)
 
-- ✅ Plugin builds, deploys, launches on TV box (`.4`, Android 10, Allwinner)
-- ✅ MITM capture working (fixed Android `wlan0` policy routing)
-- ✅ Full XTV stream architecture reverse-engineered — see [ARCHITECTURE.md](ARCHITECTURE.md)
-- ✅ Proven: segments (magloud CDN) are **open**; only the playlist needs auth
-- ✅ `M3uProxyServer` rewrites the real playlist format to standard HLS
-- ⛔ **Blocker:** continuous live needs fresh one-time playlist tokens from the
-  **cert-pinned portalCore API** — see [NEXT-BLOCKER.md](NEXT-BLOCKER.md)
+- ✅ Win11 build + deploy; **19-host** bootstrap probe with honest **`[SYN]`** / **`[FAIL]`** tags
+- ✅ Cold-start tcpdump pipeline on `.4` (`_session/capture_portal.sh`, `portal_cold.pcap`)
+- ✅ `scripts/deep_analyze_pcap.py` — SNI, HTTP Host, sgyc/ycout request detail
+- ⛔ **Blocker:** no `returnCode=0` on any bootstrap host; portalCore likely **TLS + opaque path** — [NEXT-BLOCKER.md](NEXT-BLOCKER.md), [SESSION-2026-07-27.md](SESSION-2026-07-27.md)
 
 ## How it works
 
@@ -35,9 +32,10 @@ Full detail (hosts, cookies, formats, capture method) in [ARCHITECTURE.md](ARCHI
 
 | Doc | What |
 |-----|------|
-| [HANDOFF.md](HANDOFF.md) | **Start here** — Win11 (.5) orchestration across box (.4) + Ubuntu (.40): topology, verified connections, next-step execution, MITM safety, migration criteria |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Reverse-engineered 3-tier stream pipeline, cookies, formats, working MITM capture method |
-| [NEXT-BLOCKER.md](NEXT-BLOCKER.md) | Concrete plan to unblock continuous playback (unpack ijiami DEX → reverse `startPlayLive`) |
+| [HANDOFF.md](HANDOFF.md) | **Start here** — Win11 orchestration, topology, build loop, session 7 TL;DR |
+| [SESSION-2026-07-27.md](SESSION-2026-07-27.md) | **Latest session** — wire capture achievements, blockers, next steps |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Stream pipeline, cookies, MITM method, **2026-07-27 wire host pool** |
+| [NEXT-BLOCKER.md](NEXT-BLOCKER.md) | Current blocker (version gate / 403), probe table, archive of sessions 1–6 |
 
 ## Source layout (`app/src/main/java/com/xuper/plugin/`)
 

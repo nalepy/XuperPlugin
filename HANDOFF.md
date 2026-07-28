@@ -3,21 +3,35 @@
 For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md) first.
 
-## TL;DR (updated 2026-07-27 session 9)
+## TL;DR (updated 2026-07-27 session 10)
 
 > **READ [`NEXT-BLOCKER.md`](NEXT-BLOCKER.md) top section first.**
 > Full log: [`SESSION-2026-07-27.md`](SESSION-2026-07-27.md).
 
-**Done:** plugin builds + deploys + probes 14 hosts (dual getAuthInfo/getLiveData).
+**Done:** cold-start tcpdump on `.4` (846 pkts) + targeted port-80 capture; bootstrap
+expanded to **19 hosts**; `probePortalBootstrap()` now tags **`[SYN]` / `[FAIL]`** vs real
+**`[✓Nch]`** (`LiveDataFetch` / `probeGetLiveData`). Tooling: `scripts/deep_analyze_pcap.py`,
+`_session/capture_portal.sh`, `_session/capture_sgyc_port80.sh`.
+
+**Findings:** `sgyc` / `ycout` are **WebSocket** endpoints (not portalCore). New TLS SNI
+`34fhwevf.cbcf4gg3f.com` on cold start; still no cleartext `portalCore` POST on port 80.
+
+**Blocked:** all probed hosts still **`portal200001`** or **403/404** — true DES-resolved
+portalCore host not identified (likely pinned TLS + opaque path).
+
+**Next:** (1) longer **443** capture during cold start / channel play — hunt **new SNIs**;
+(2) heap / `/proc` strings for resolved host after login; (3) fresh **`s`/`t`** MITM;
+(4) after `returnCode=0` → `getColumnContents` → `getLiveData(channelId)` → proxy refresh.
+
+---
+
+## TL;DR (archive — session 9, 2026-07-27)
+
+**Done:** plugin builds + deploys + probes hosts (dual getAuthInfo/getLiveData).
 Cookie interference fixed. b29/reserve1 = STATIC. getLiveData body enriched with
-live fields. 3DES+envelope proven (server parses our user, generates auth_id).
-VOD structure mapped (COLUMN_CODE_MOVIES/SERIES, columnIds 10001-10006).
+live fields. 3DES+envelope proven. VOD structure mapped.
 
-**Blocked:** all reachable hosts version-gate (portal200001). App uses a DES-resolved
-host NOT in our 14-host pool.
-
-**Next:** capture the app's actual portalCore host (SSL SNI during channel-switch, or
-DES-domain resolved in process memory). The tcpdump + analysis pipeline is ready.
+**Blocked:** version-gate on pool; app DES-resolved host not in pool.
 
 ---
 

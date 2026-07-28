@@ -1,12 +1,38 @@
 # Next Blocker — XuperPlugin portalCore
 
-## Status (2026-07-27 session 9)
+## Status (2026-07-27 session 10)
 
-**The plugin compiles, deploys, calls the real portalCore API, and the server parses our
-request — but every reachable host version-gates (`portal200001`) or CF-WAF-blocks (403).
-The app uses a host NOT in our pool, reached via DES-domain resolution in the native layer.**
+**Plugin probes are honest again (`[SYN]` vs `[✓Nch]`). Cold-start wire capture found new
+domains but not cleartext portalCore — `sgyc`/`ycout` are WebSocket only. Every bootstrap
+host still version-gates or WAF-blocks; DES-resolved portalCore host remains unknown.**
 
 ---
+
+## Session 10 — wire capture + probe fix (2026-07-27 ~22:10)
+
+| Finding | Evidence |
+|---------|----------|
+| Cold-start capture works | `_session/portal_cold.pcap` — 846 pkts, ports 80+443, script `_session/capture_portal.sh` |
+| Channel-zap-only capture weak | `_session/portal_switch.pcap` — 98 pkts, analytics SNI only |
+| New TLS SNI candidate | `34fhwevf.cbcf4gg3f.com` (plugin: 404 HTML on logical `/api/portalCore/...`) |
+| `sgyc` / `ycout` **not** portalCore | `_session/sgyc_port80.pcap` — WS `GET /v1/imagine`, `GET /v1/ws/...` — no apkVer/Cookie/body |
+| Ad server cleartext | `yvhcn.hxjebagrv.com` — `POST /api/adserver/v3/get_content` JSON |
+| EPG on wire | `vgwbm` / `rokbd` — `GET /epg/v2/live/...` with `apk` + `apkVer` |
+| Probe UX fixed | `LiveDataFetch` + `probeGetLiveData()` — `[✓Nch]` only if `returnCode=0` + parsed channels |
+| Bootstrap | 19 hosts (added 34fhwevf, eskna, yvhcn, zxiws, nxiqj); **removed** sgyc/ycout from probe list |
+
+**Next (ordered):**
+
+1. **443-focused cold start** — 60s tcpdump while XTV boots; diff SNIs vs pool; try HTTPS probe on top NEW names.
+2. **Runtime host** — `strings` / heap carve on `com.android.mgstv` after Home (search `portalCore`, obfuscated hostnames).
+3. **Fresh `s`/`t`** — MITM on `.40` (box-source-only); re-probe old pool + `34fhwevf`.
+4. **Product** — after first real `getLiveData` JSON → `getColumnContents` → channel `getLiveData` → `M3uProxyServer` refresh.
+
+Scripts: `scripts/deep_analyze_pcap.py` (SNI + Host + sgyc/ycout HTTP detail), `_session/capture_sgyc_port80.sh`.
+
+---
+
+## Status (archive — session 9)
 
 ## What we proved (session 9 — high-confidence)
 
@@ -49,7 +75,7 @@ the app actually talks to.
 - **JAVA_HOME** fixed: `C:/Program Files/Microsoft/jdk-17.0.18.8-hotspot`
 - **Build** working: `./gradlew :app:assembleDebug --no-daemon`
 - **Deploy** pattern: uninstall old → install new → `am start -n com.xuper.plugin/.ConfigActivity` → tap "Test Session"
-- **probePortalBootstrap()**: probes all 14 hosts, clears stale cookies first, tries both getAuthInfo + getLiveData, reports full results in logcat
+- **probePortalBootstrap()**: probes bootstrap hosts (19), clears stale cookies first; live line uses **`[✓Nch]`** / **`[SYN]`** / **`[FAIL]`** via `probeGetLiveData()` — not synthetic stream-key channels
 - **Config** up to date: `userToken=dbf6956a-...`, `portalCode=masnew`, `userId=169355704`, `columnId=76182`, `dataVersion=pre31...`, envelope with all device fields
 
 | Host (source) | Role (docs) | Win11 probe (hdr + d/s/t cookies) |
@@ -62,9 +88,9 @@ the app actually talks to.
 
 **Device session (`.4`, `cache.config.xml`):** `key_user_id=169355704`, `KEY_SP_SN` matches plugin `d` cookie. **`s`/`t` not in shared_prefs** — refresh via MITM or Set-Cookie capture while streaming.
 
-**Next on `.4`:** keep a channel playing → `capture_streaming.sh` (50s) → `deep_analyze_pcap.py` → if new host appears, add to bootstrap list. Optionally MITM on `.40` for fresh `s`/`t` only (stream seed stays pinned).
+**Next on `.4`:** cold-start capture → `python scripts/deep_analyze_pcap.py _session/portal_cold.pcap`; port-80 deep dive `_session/sgyc_port80.pcap`. Do **not** treat `sgyc`/`ycout` as portalCore bootstrap hosts.
 
-Scripts: `_tmp/capture_streaming.sh`, `scripts/deep_analyze_pcap.py`, `scripts/probe_portal.py`.
+Scripts: `_session/capture_portal.sh`, `_session/capture_sgyc_port80.sh`, `scripts/deep_analyze_pcap.py`, `scripts/probe_portal.py`.
 
 **Pending after gate:** `getColumnContents`, `getLiveData(channelId)`, M3uProxyServer refresh loop.
 

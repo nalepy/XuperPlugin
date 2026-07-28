@@ -87,11 +87,23 @@ data class XuperChannel(
     val columnId: Int = 0
 )
 
+data class LiveDataFetch(
+    val channels: List<XuperChannel>,
+    val apiSuccess: Boolean,
+    val probeHint: String,
+)
+
 class XuperApiClient(context: Context) {
 
   companion object {
         /** CF-fronted portalCore hosts (session 6c); use DOH on Win11 if DNS fails. */
         val PORTAL_BOOTSTRAP_HOSTS = listOf(
+            // Cold-start tcpdump 2026-07-27 — TLS SNI candidates (not WS-only sgyc/ycout)
+            "34fhwevf.cbcf4gg3f.com",
+            "eskna.ucpjdhivl.com",
+            "yvhcn.hxjebagrv.com",
+            "zxiws.tcgwhnvym.com",
+            "nxiqj.jgrqyxupl.com",
             "hbyyqx.qtg20rybb.xyz",
             "emowvv.dqiswip4.xyz",
             "dfcsq.divqohamz.com",
@@ -537,11 +549,22 @@ class XuperApiClient(context: Context) {
             if (isJson && "returnCode=0" in msg && bestHost.isEmpty()) bestHost = host
 
             // also try getLiveData directly (app skips getAuthInfo on auto-login)
-            val lr = getLiveData()
-            val liveOk = lr.isSuccess && (lr.getOrNull()?.isNotEmpty() == true)
-            val liveTag = if (liveOk) "[✓${lr.getOrNull()!!.size}ch]" else "[?]"
-            lines.add("$host live $liveTag ${if (lr.isSuccess) "${lr.getOrNull()?.size ?: 0} channels" else lr.exceptionOrNull()?.message ?: "?"}")
-            if (liveOk && bestHost.isEmpty()) bestHost = host
+            val lr = probeGetLiveData()
+            val fetch = lr.getOrNull()
+            val liveTag = when {
+                fetch?.apiSuccess == true -> "[✓${fetch.channels.size}ch]"
+                lr.isFailure -> "[FAIL] ${lr.exceptionOrNull()?.message ?: "?"}"
+                fetch != null && fetch.channels.isNotEmpty() -> "[SYN]"
+                fetch != null -> "[FAIL]"
+                else -> "[?]"
+            }
+            val liveDetail = when {
+                fetch != null -> fetch.probeHint
+                lr.isFailure -> lr.exceptionOrNull()?.message ?: "?"
+                else -> "?"
+            }
+            lines.add("$host live $liveTag $liveDetail")
+            if (fetch?.apiSuccess == true && bestHost.isEmpty()) bestHost = host
         }
         if (bestHost.isNotEmpty()) config = config.copy(portalHost = bestHost)
         config = config.copy(cookieD = savedCookies.first, cookieS = savedCookies.second, cookieT = savedCookies.third)
@@ -591,7 +614,15 @@ class XuperApiClient(context: Context) {
         }
     }
 
-    fun getLiveData(): Result<List<XuperChannel>> {
+    fun probeGetLiveData(): Result<LiveDataFetch> = try {
+        Result.success(fetchLiveData())
+    } catch (e: IOException) {
+        Result.failure(e)
+    }
+
+    fun getLiveData(): Result<List<XuperChannel>> = probeGetLiveData().map { it.channels }
+
+    private fun fetchLiveData(): LiveDataFetch {
         val c = config
         // Full envelope + getLiveData-specific fields (captured from live app session).
         val body = envelope {
@@ -604,19 +635,48 @@ class XuperApiClient(context: Context) {
 
         val (code, resp) = postJson(portalHost(), "/api/portalCore/v6/getLiveData", body)
         android.util.Log.i("XuperPlugin", "getLiveData ${portalHost()} code=$code respLen=${resp?.length ?: 0} head=${resp?.take(80)}")
-        if (code <= 0) return Result.failure(IOException("network: $resp"))
+        if (code <= 0) throw IOException("network: $resp")
         if (resp.isNullOrBlank()) {
-            // plain path likely blocked/encrypted — fall back to synthetic channel from known stream key
-            return Result.success(syntheticChannelsFromStreamKey())
+            val syn = syntheticChannelsFromStreamKey()
+            return LiveDataFetch(
+                channels = syn,
+                apiSuccess = false,
+                probeHint = "HTTP $code empty -> SYN(${syn.size})",
+            )
         }
 
         return try {
             val root = json.parseToJsonElement(resp)
+            val obj = root as? JsonObject
+            val returnCode = obj?.get("returnCode")?.jsonPrimitive?.contentOrNull ?: "?"
             val channels = parseChannels(root)
-            if (channels.isEmpty()) Result.success(syntheticChannelsFromStreamKey())
-            else Result.success(channels)
-        } catch (_: Exception) {
-            Result.success(syntheticChannelsFromStreamKey())
+            when {
+                returnCode == "0" && channels.isNotEmpty() -> LiveDataFetch(
+                    channels = channels,
+                    apiSuccess = true,
+                    probeHint = "HTTP $code returnCode=$returnCode ${channels.size}ch",
+                )
+                channels.isNotEmpty() -> LiveDataFetch(
+                    channels = channels,
+                    apiSuccess = false,
+                    probeHint = "HTTP $code returnCode=$returnCode ${channels.size}ch (not ok)",
+                )
+                else -> {
+                    val syn = syntheticChannelsFromStreamKey()
+                    LiveDataFetch(
+                        channels = syn,
+                        apiSuccess = false,
+                        probeHint = "HTTP $code returnCode=$returnCode empty -> SYN(${syn.size})",
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            val syn = syntheticChannelsFromStreamKey()
+            LiveDataFetch(
+                channels = syn,
+                apiSuccess = false,
+                probeHint = "HTTP $code unparseable -> SYN(${syn.size})",
+            )
         }
     }
 
