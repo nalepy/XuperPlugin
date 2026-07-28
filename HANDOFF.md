@@ -3,31 +3,29 @@
 For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md) first.
 
-## TL;DR (updated 2026-07-26 ~02:00)
+## TL;DR (updated 2026-07-27 session 9)
 
-> ⭐ **SESSION 6 BREAKTHROUGH (21:30) — READ `NEXT-BLOCKER.md` TOP SECTIONS FIRST.**
-> The on-device "crash loop / instability" was ijiami **self-SIGKILLing a debug-re-signed
-> APK**. Install the **vendor-signed `XTV_4.34.5.apk`** (cert `CN=sgm sgmtv`) → app is
-> STABLE, DEX decrypts in memory, root `/proc/mem` dump works. Never install a re-signed
-> APK on `.4` again. Login save/restore: `save_session.sh` / `restore_session.sh` on Win11.
->
-> ✅ **REVERSING COMPLETE (session 6b).** Full live pipeline recovered from heap dumps:
-> getAuthInfo(v9) → getLiveData(v6) → signed CDN playlist URL (cdsr/bmagon/yuwc via
-> getSlbInfo v15) → open magloud segments. Tokens are SERVER-signed (`sign_type=cfl/cs`,
-> not client-forgeable) → must call getLiveData to refresh. **Next session = pure Kotlin
-> implementation** against the spec in `NEXT-BLOCKER.md` → "🔨 IMPLEMENTATION PLAN".
-> Captured evidence: `_session/heap_live.bin` (logged-in+streaming), `heap1.bin` (visitor).
+> **READ [`NEXT-BLOCKER.md`](NEXT-BLOCKER.md) top section first.**
+> Full log: [`SESSION-2026-07-27.md`](SESSION-2026-07-27.md).
 
-- **DEX dump failed** — ijiami v4 wipes DEX headers in memory. BlackDex (hung),
-  DarkDex (0 dex, 1249 URLs + 12 classes extracted), memory dump (no DEX magic).
-  See [STATUS](#ijiami-v4-dumping-attempts-2026-07-26) below.
-- **MITM IS needed next** — capture fresh `s`/`t` cookies so we can probe
-  portalCore API directly. Cookies from last session are stale (days old).
-- **Stub decompiled** — real app class is `com.interactive.brasiliptv.app.AppWrapper`,
-  loaded by `DETool.loadDEso()`. DEX decrypted by native `libexec.so` via `N.b2b()`.
-- **11 portalCore hosts identified** by DarkDex (up from 5 pinned hosts known before).
-  See [portalCore hosts](#portalcore-hosts-discovered) below.
-- **Orchestration stays on Win11 (.5)**.
+**Done:** plugin builds + deploys + probes 14 hosts (dual getAuthInfo/getLiveData).
+Cookie interference fixed. b29/reserve1 = STATIC. getLiveData body enriched with
+live fields. 3DES+envelope proven (server parses our user, generates auth_id).
+VOD structure mapped (COLUMN_CODE_MOVIES/SERIES, columnIds 10001-10006).
+
+**Blocked:** all reachable hosts version-gate (portal200001). App uses a DES-resolved
+host NOT in our 14-host pool.
+
+**Next:** capture the app's actual portalCore host (SSL SNI during channel-switch, or
+DES-domain resolved in process memory). The tcpdump + analysis pipeline is ready.
+
+---
+
+## TL;DR (archive — session 6, 2026-07-26)
+
+> ⭐ **SESSION 6 BREAKTHROUGH (21:30) — see archive in `NEXT-BLOCKER.md`.**
+> Vendor-signed **`XTV_4.34.5.apk`** only on `.4` (no debug re-sign). Heap pipeline:
+> getAuthInfo → getLiveData → signed CDN → open magloud. Tokens server-signed.
 
 ## Machine topology (verified 2026-07-26)
 

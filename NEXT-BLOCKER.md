@@ -1,30 +1,56 @@
 # Next Blocker — XuperPlugin portalCore
 
-## Current blocker (2026-07-27 — updated session 8 ~21:30)
+## Status (2026-07-27 session 9)
 
-**All paths probed. The portalCore API is reachable but gated.**
+**The plugin compiles, deploys, calls the real portalCore API, and the server parses our
+request — but every reachable host version-gates (`portal200001`) or CF-WAF-blocks (403).
+The app uses a host NOT in our pool, reached via DES-domain resolution in the native layer.**
 
-| Host pool | Device curl | Win11 curl | Notes |
-|-----------|------------|------------|-------|
-| Old (`sxowvd`, `espjey`, `dfcsq`, etc.) | **200** `portal200001` | **200** `portal200001` | version-gate, every host |
-| Live wire (`rokbd`, `vgwbm`) | **403** CF blocked | **403** CF blocked | WAF; app passes (TLS fp/cookies) |
-| Live wire (`sfgknh`) | HTML 404 | HTML 404 | portal assets, not API |
+---
 
-**Confirmed this session (8):**
-- **MITM dead end** — portalCore cert-pinned/QUIC, confirmed uncapturable via TCP 80/443 redirect
-- **MarketServer** (via MITM): `action=checkUpdate` → `<list rows="0"/>` → **NO forced update for 43405**. Your context correct: 43405 is genuine official (not community-patched); server tolerates it, just version-gates the API directly.
-- **Session restore WORKS** — `restore_session.sh` + manual root chown → app auto-logs in as `169355704` → `HomeActivity` with channels → streaming functions (`program: cyx-ATV` in player logs)
-- **3DES + envelope 100% VALIDATED** — server parses our body, returns real portalCore JSON (`returnCode:"portal200001"`)
-- **`userToken` NOT extractable** from heap as raw string (stored in Java objects, evicted after use). Must capture from plugin's own request.
-- **Device IP doesn't bypass CF WAF** — live hosts block curl from `.4`'s own IP; app passes via native TLS fingerprint / clearance cookies.
+## What we proved (session 9 — high-confidence)
 
-**Path forward — BUILD + DEPLOY the plugin:**
-1. Fix `JAVA_HOME` (Win11: `C:/Program Files/Microsoft/jdk-17.0.18.8-hotspot`) → `./gradlew :app:assembleDebug`
-2. `adb install -r` the APK on `.4`
-3. Open XuperPlugin app → it calls `probePortalBootstrap()` with the LIVE config
-4. Read logcat for the first successful `returnCode` → then implement `getColumnContents` → `getLiveData(channelId)` → M3uProxyServer refresh
+| claim | evidence |
+|-------|----------|
+| b29/reserve1 are STATIC device constants | same hex in session 6 + session 9 live heap |
+| userToken rotates on each auto-login | `dbf6956a-cf03-4750-8c9b-28cc937e0148` (current) ≠ `42eebacb-...` (old) |
+| stale d/s/t cookies cause HTTP 400 | all pool hosts: 400 with cookies → portal200001 without |
+| getLiveData called DIRECTLY (skips getAuthInfo) | app's logged request body: envelope + columnId + dataVersion + pageNum/pageSize |
+| 3DES + envelope correct | dfcsq returns `auth_id=169355704_com.android.msandroid__0` (server parsed our user) |
+| app streams fine on 43405 | MarketServer: no forced update, player logs show live channels playing |
+| VOD is a separate columnId | `COLUMN_CODE_MOVIES`, `COLUMN_CODE_SERIES`, columnIds 10001/10002/10006 |
 
-The code is already written (`envelope()`, `getSlbInfo()`, `getAuthInfo()`, `getLiveData()`, `PORTAL_BOOTSTRAP_HOSTS`, `probePortalBootstrap()`). Just needs a build + deploy run.
+## Host pool results (14 hosts, dual-probed getAuthInfo + getLiveData)
+
+| host | getAuthInfo | getLiveData |
+|------|------------|-------------|
+| live wire (rokbd, vgwbm) | 403 CF WAF | 403 CF WAF |
+| portal assets (sfgknh, hbyyqx) | 403 / HTML | 403 / HTML |
+| old pool (espjey, sxowvd, yrqucu, fuxok, mptec, emowvv) | portal200001 | portal200001 |
+| market host (iyut) | 404 + auth_id generated | 404 |
+| dfcsq (special) | portal200001 (no cookies) / 500+auth_id (with cookies) | portal200001 |
+| xsvs.* | HTML 404 / conn reset | HTML 404 |
+| **app's actual host** | **? unknown, not in pool** | **? works — returns channel list + signed CDN URLs** |
+
+## What's blocking — and why
+
+The app resolves its portalCore host via a DES-domain config (`domain|DES` in the native
+layer). The DES blob doesn't decrypt with the body 3DES key. The app caches the resolved
+host and calls getLiveData(v6) directly on it — that's why it works while our probes on
+the known pool don't.
+
+**Next decisive move:** capture the DES-resolved host from the app's runtime memory or
+via SSL SNI during a fresh channel-switch. The `.4` box has tcpdump; a 30-second capture
+while `input keyevent` changes channel should surface the TLS SNI of the portalCore host
+the app actually talks to.
+
+## Plugin state
+
+- **JAVA_HOME** fixed: `C:/Program Files/Microsoft/jdk-17.0.18.8-hotspot`
+- **Build** working: `./gradlew :app:assembleDebug --no-daemon`
+- **Deploy** pattern: uninstall old → install new → `am start -n com.xuper.plugin/.ConfigActivity` → tap "Test Session"
+- **probePortalBootstrap()**: probes all 14 hosts, clears stale cookies first, tries both getAuthInfo + getLiveData, reports full results in logcat
+- **Config** up to date: `userToken=dbf6956a-...`, `portalCode=masnew`, `userId=169355704`, `columnId=76182`, `dataVersion=pre31...`, envelope with all device fields
 
 | Host (source) | Role (docs) | Win11 probe (hdr + d/s/t cookies) |
 |---------------|-------------|-------------------------------------|
