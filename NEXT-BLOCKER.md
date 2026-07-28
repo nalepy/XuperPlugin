@@ -1,3 +1,65 @@
+# Next Blocker — XuperPlugin portalCore
+
+## Current blocker (2026-07-27 — updated session 8 ~21:30)
+
+**All paths probed. The portalCore API is reachable but gated.**
+
+| Host pool | Device curl | Win11 curl | Notes |
+|-----------|------------|------------|-------|
+| Old (`sxowvd`, `espjey`, `dfcsq`, etc.) | **200** `portal200001` | **200** `portal200001` | version-gate, every host |
+| Live wire (`rokbd`, `vgwbm`) | **403** CF blocked | **403** CF blocked | WAF; app passes (TLS fp/cookies) |
+| Live wire (`sfgknh`) | HTML 404 | HTML 404 | portal assets, not API |
+
+**Confirmed this session (8):**
+- **MITM dead end** — portalCore cert-pinned/QUIC, confirmed uncapturable via TCP 80/443 redirect
+- **MarketServer** (via MITM): `action=checkUpdate` → `<list rows="0"/>` → **NO forced update for 43405**. Your context correct: 43405 is genuine official (not community-patched); server tolerates it, just version-gates the API directly.
+- **Session restore WORKS** — `restore_session.sh` + manual root chown → app auto-logs in as `169355704` → `HomeActivity` with channels → streaming functions (`program: cyx-ATV` in player logs)
+- **3DES + envelope 100% VALIDATED** — server parses our body, returns real portalCore JSON (`returnCode:"portal200001"`)
+- **`userToken` NOT extractable** from heap as raw string (stored in Java objects, evicted after use). Must capture from plugin's own request.
+- **Device IP doesn't bypass CF WAF** — live hosts block curl from `.4`'s own IP; app passes via native TLS fingerprint / clearance cookies.
+
+**Path forward — BUILD + DEPLOY the plugin:**
+1. Fix `JAVA_HOME` (Win11: `C:/Program Files/Microsoft/jdk-17.0.18.8-hotspot`) → `./gradlew :app:assembleDebug`
+2. `adb install -r` the APK on `.4`
+3. Open XuperPlugin app → it calls `probePortalBootstrap()` with the LIVE config
+4. Read logcat for the first successful `returnCode` → then implement `getColumnContents` → `getLiveData(channelId)` → M3uProxyServer refresh
+
+The code is already written (`envelope()`, `getSlbInfo()`, `getAuthInfo()`, `getLiveData()`, `PORTAL_BOOTSTRAP_HOSTS`, `probePortalBootstrap()`). Just needs a build + deploy run.
+
+| Host (source) | Role (docs) | Win11 probe (hdr + d/s/t cookies) |
+|---------------|-------------|-------------------------------------|
+| `sfgknh.qho3cnsyil.com` | portal assets; **TLS SNI during stream** | **403** (with d/s/t + apkVer headers) |
+| `rokbd.ysrkwctjg.com`, `vgwbm.uwfyobivh.com` | payload domains on wire | **403** |
+| `espjey.ysnihrwtg.com` | old portalCore pool | **400** with cookies; **portal200001** without (see full probe) |
+
+**No `magloud` / `cdsr` / `m3u8` in pcaps** — playlist CDN traffic is likely **pinned TLS or cleartext HTTP** not caught as SNI in these captures; portal API still the gate for fresh signed URLs.
+
+**Device session (`.4`, `cache.config.xml`):** `key_user_id=169355704`, `KEY_SP_SN` matches plugin `d` cookie. **`s`/`t` not in shared_prefs** — refresh via MITM or Set-Cookie capture while streaming.
+
+**Next on `.4`:** keep a channel playing → `capture_streaming.sh` (50s) → `deep_analyze_pcap.py` → if new host appears, add to bootstrap list. Optionally MITM on `.40` for fresh `s`/`t` only (stream seed stays pinned).
+
+Scripts: `_tmp/capture_streaming.sh`, `scripts/deep_analyze_pcap.py`, `scripts/probe_portal.py`.
+
+**Pending after gate:** `getColumnContents`, `getLiveData(channelId)`, M3uProxyServer refresh loop.
+
+## Session 7 achievements (2026-07-27)
+
+- Wire capture on `.4` while **live channels playing** (`_session/streaming.pcap`).
+- **TLS SNI during stream:** `sfgknh.qho3cnsyil.com`.
+- **Payload domains on wire:** `rokbd.ysrkwctjg.com`, `vgwbm.uwfyobivh.com` (plus earlier `iyut.xgw3sdzoac.com` on Home traffic).
+- Win11 `getAuthInfo` probe: live hosts → **403**; old heap hosts → **portal200001** (no cookies) or **400** (stale `d;s;t`).
+- Plugin: `PORTAL_BOOTSTRAP_HOSTS` + `apkVer`/`spkgVer`/`apk` headers; `probePortalBootstrap()`.
+- Tooling: `Xuper/scripts/probe_portal.py`, `deep_analyze_pcap.py`, `_tmp/capture_streaming.sh`.
+- Full log: [SESSION-2026-07-27.md](SESSION-2026-07-27.md).
+
+## Next step (single priority)
+
+**Capture fresh `s` and `t` cookies** while streaming (MITM on `.40` per below, or Set-Cookie hook), update `XuperConfig`, re-run probes. Without that, old pool returns 400 and live hosts stay 403.
+
+---
+
+## Archive — original goal + session notes
+
 # Next Blocker — Get the portalCore `startPlayLive` request format
 
 ## Goal
