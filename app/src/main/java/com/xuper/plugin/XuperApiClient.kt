@@ -34,7 +34,13 @@ data class XuperConfig(
     val cookieS: String = "QDtRcPPKDAwtROdnoGlxRgXpj64ElYpBBNH0TIZO20TIcc",
     val cookieT: String = "kzDQKAgQI3UlOy-bl3ScQrOcu3NIHFGAY5PZ6xuoZ3z",
     val userId: String = "169355704",
-    val userToken: String = "42eebacb-1a56-46d4-8f8e-94ba32e5b99d",
+    val userToken: String = "dbf6956a-cf03-4750-8c9b-28cc937e0148",
+    // --- getLiveData fields (captured from live app session) ---
+    val columnId: Int = 76182,
+    val dataVersion: String = "pre3194bfb81-899a-11f1-b41c-e7ba14321033LiveDataV6",
+    val pageNum: Int = 1,
+    val pageSize: Int = 3000,
+    val expireTimeStr: String = "",
     // portalCode is the literal string "masnew" (captured from getAuthInfo request),
     // NOT the old hex 6e54356f76774c54574b303d (that was a different/derived value).
     val portalCode: String = "masnew",
@@ -86,6 +92,9 @@ class XuperApiClient(context: Context) {
   companion object {
         /** CF-fronted portalCore hosts (session 6c); use DOH on Win11 if DNS fails. */
         val PORTAL_BOOTSTRAP_HOSTS = listOf(
+            "hbyyqx.qtg20rybb.xyz",
+            "emowvv.dqiswip4.xyz",
+            "dfcsq.divqohamz.com",
             "sfgknh.qho3cnsyil.com",
             "rokbd.ysrkwctjg.com",
             "iyut.xgw3sdzoac.com",
@@ -93,7 +102,6 @@ class XuperApiClient(context: Context) {
             "espjey.ysnihrwtg.com",
             "sxowvd.jzvqwcyor.com",
             "yrqucu.czxenpyba.com",
-            "dfcsq.divqohamz.com",
             "fuxok.nguvmqhpk.com",
             "mptec.dhkrxuzcy.com",
             "xsvs.evlslb.com",
@@ -514,21 +522,29 @@ class XuperApiClient(context: Context) {
     fun probePortalBootstrap(): Result<String> {
         val lines = mutableListOf<String>()
         var bestHost = ""
+        val savedCookies = Triple(config.cookieD, config.cookieS, config.cookieT)
+        config = config.copy(cookieD = "", cookieS = "", cookieT = "")  // clear stale cookies
         for (host in PORTAL_BOOTSTRAP_HOSTS) {
             config = config.copy(portalHost = host)
+            // try getAuthInfo first
             val r = getAuthInfo()
             val msg = r.getOrElse { "ERR ${it.message}" }
             val isJson = msg.contains("returnCode")
             val isHtml = msg.contains("<!DOCTYPE") || msg.contains("<html") || msg.startsWith("HTTP 403")
             val isBlocked = msg.contains("portal200001")
-            val tag = when { isHtml -> "[HTML/non-API]" ; isBlocked -> "[VERSION-GATED]" ; isJson -> "[JSON✓]" ; else -> "[?]" }
-            lines.add("$host $tag → $msg")
-            if (isJson && !isBlocked && bestHost.isEmpty()) bestHost = host
-            // don't break early — report all hosts
+            val tag = when { isHtml -> "[HTML]" ; isBlocked -> "[V-GATE]" ; isJson && msg.contains("returnCode=0") -> "[✓AUTH]" ; isJson -> "[JSN]" ; else -> "[?]" }
+            lines.add("$host auth $tag $msg")
+            if (isJson && "returnCode=0" in msg && bestHost.isEmpty()) bestHost = host
+
+            // also try getLiveData directly (app skips getAuthInfo on auto-login)
+            val lr = getLiveData()
+            val liveOk = lr.isSuccess && (lr.getOrNull()?.isNotEmpty() == true)
+            val liveTag = if (liveOk) "[✓${lr.getOrNull()!!.size}ch]" else "[?]"
+            lines.add("$host live $liveTag ${if (lr.isSuccess) "${lr.getOrNull()?.size ?: 0} channels" else lr.exceptionOrNull()?.message ?: "?"}")
+            if (liveOk && bestHost.isEmpty()) bestHost = host
         }
-        if (bestHost.isNotEmpty()) {
-            config = config.copy(portalHost = bestHost)
-        }
+        if (bestHost.isNotEmpty()) config = config.copy(portalHost = bestHost)
+        config = config.copy(cookieD = savedCookies.first, cookieS = savedCookies.second, cookieT = savedCookies.third)
         return Result.success(lines.joinToString("\n"))
     }
 
@@ -577,12 +593,17 @@ class XuperApiClient(context: Context) {
 
     fun getLiveData(): Result<List<XuperChannel>> {
         val c = config
-        // Full envelope + live-specific fields (channelID/columnId/liveType per captured beans).
+        // Full envelope + getLiveData-specific fields (captured from live app session).
         val body = envelope {
-            put("liveType", "1")
+            if (c.columnId > 0) put("columnId", c.columnId)
+            if (c.dataVersion.isNotBlank()) put("dataVersion", c.dataVersion)
+            put("pageNum", c.pageNum)
+            put("pageSize", c.pageSize)
+            if (c.expireTimeStr.isNotBlank()) put("expireTimeStr", c.expireTimeStr)
         }
 
         val (code, resp) = postJson(portalHost(), "/api/portalCore/v6/getLiveData", body)
+        android.util.Log.i("XuperPlugin", "getLiveData ${portalHost()} code=$code respLen=${resp?.length ?: 0} head=${resp?.take(80)}")
         if (code <= 0) return Result.failure(IOException("network: $resp"))
         if (resp.isNullOrBlank()) {
             // plain path likely blocked/encrypted — fall back to synthetic channel from known stream key
