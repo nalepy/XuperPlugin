@@ -48,6 +48,7 @@ data class XuperConfig(
     // --- getAuthInfo/getLiveData request envelope (captured device fields, V76PRO) ---
     val appId: String = "com.android.msandroid",
     val apkVersion: String = "43405",
+    val spkgVersion: String = "43405",
     val appLanguage: String = "es",
     val model: String = "V76PRO",
     val product: String = "walley",
@@ -81,6 +82,24 @@ data class XuperChannel(
 )
 
 class XuperApiClient(context: Context) {
+
+  companion object {
+        /** CF-fronted portalCore hosts (session 6c); use DOH on Win11 if DNS fails. */
+        val PORTAL_BOOTSTRAP_HOSTS = listOf(
+            "sfgknh.qho3cnsyil.com",
+            "rokbd.ysrkwctjg.com",
+            "iyut.xgw3sdzoac.com",
+            "vgwbm.uwfyobivh.com",
+            "espjey.ysnihrwtg.com",
+            "sxowvd.jzvqwcyor.com",
+            "yrqucu.czxenpyba.com",
+            "dfcsq.divqohamz.com",
+            "fuxok.nguvmqhpk.com",
+            "mptec.dhkrxuzcy.com",
+            "xsvs.evlslb.com",
+            "xsvs.vfltbr.com",
+        )
+    }
 
     private val appContext = context.applicationContext
 
@@ -271,6 +290,14 @@ class XuperApiClient(context: Context) {
             .post(wireBody.toRequestBody(media))
             .addHeader("Content-Type", "application/json;charset=utf-8")
             .addHeader("Cache-Control", "no-store")
+            .apply {
+                if (logicalPath.contains("portalCore")) {
+                    val c = config
+                    addHeader("apkVer", c.apkVersion)
+                    addHeader("spkgVer", c.spkgVersion)
+                    addHeader("apk", c.appId)
+                }
+            }
             .build()
         return try {
             client.newCall(req).execute().use { resp ->
@@ -477,7 +504,33 @@ class XuperApiClient(context: Context) {
         }.toString()
     }
 
-    private fun portalHost(): String = config.portalHost.ifBlank { config.apiHost }
+    private fun portalHost(): String =
+        config.portalHost.ifBlank { PORTAL_BOOTSTRAP_HOSTS.first() }
+
+    /**
+     * Try each bootstrap host with getAuthInfo; sets portalHost on first HTTP 200 + JSON body.
+     * returnCode may still be portal200001 until wire diff from .4 is done.
+     */
+    fun probePortalBootstrap(): Result<String> {
+        val lines = mutableListOf<String>()
+        var bestHost = ""
+        for (host in PORTAL_BOOTSTRAP_HOSTS) {
+            config = config.copy(portalHost = host)
+            val r = getAuthInfo()
+            val msg = r.getOrElse { "ERR ${it.message}" }
+            val isJson = msg.contains("returnCode")
+            val isHtml = msg.contains("<!DOCTYPE") || msg.contains("<html") || msg.startsWith("HTTP 403")
+            val isBlocked = msg.contains("portal200001")
+            val tag = when { isHtml -> "[HTML/non-API]" ; isBlocked -> "[VERSION-GATED]" ; isJson -> "[JSON✓]" ; else -> "[?]" }
+            lines.add("$host $tag → $msg")
+            if (isJson && !isBlocked && bestHost.isEmpty()) bestHost = host
+            // don't break early — report all hosts
+        }
+        if (bestHost.isNotEmpty()) {
+            config = config.copy(portalHost = bestHost)
+        }
+        return Result.success(lines.joinToString("\n"))
+    }
 
     /**
      * POST /api/portalCore/v15/getSlbInfo — resolves the serving portalCore host.

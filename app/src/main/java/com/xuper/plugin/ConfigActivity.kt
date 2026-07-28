@@ -252,18 +252,22 @@ class ConfigActivity : Activity() {
 
     private fun testSession() {
         saveConfig()
-        statusText.text = "Testing…"
+        statusText.text = "Probing portalCore hosts…"
         statusText.setTextColor(Color.parseColor("#FFEB3B"))
         Thread {
-            val result = apiClient.testSession()
+            val probeResult = apiClient.probePortalBootstrap()
+            val probeText = probeResult.getOrElse { "probe err: ${it.message}" }
+            android.util.Log.i("XuperPlugin", "probePortalBootstrap: $probeText")
+
+            // then also run normal session test
+            val sessionResult = apiClient.testSession()
+            val sessionText = sessionResult.getOrElse { "session err: ${sessionResult.exceptionOrNull()?.message}" }
+            android.util.Log.i("XuperPlugin", "testSession: $sessionText")
+
+            val display = "PROBE:\n$probeText\n\nSESSION:\n$sessionText"
             runOnUiThread {
-                if (result.isSuccess) {
-                    statusText.text = result.getOrNull()
-                    statusText.setTextColor(Color.parseColor("#4CAF50"))
-                } else {
-                    statusText.text = "Failed: ${result.exceptionOrNull()?.message}"
-                    statusText.setTextColor(Color.parseColor("#F44336"))
-                }
+                statusText.text = display
+                statusText.setTextColor(if (sessionResult.isSuccess) Color.parseColor("#4CAF50") else Color.parseColor("#F44336"))
             }
         }.start()
     }
