@@ -98,7 +98,7 @@ class XuperApiClient(context: Context) {
   companion object {
         /** CF-fronted portalCore hosts (session 6c); use DOH on Win11 if DNS fails. */
         val PORTAL_BOOTSTRAP_HOSTS = listOf(
-            // Cold-start tcpdump 2026-07-27 — TLS SNI candidates (not WS-only sgyc/ycout)
+            // Cold-start tcpdump 2026-07-27 — TLS SNI candidates
             "34fhwevf.cbcf4gg3f.com",
             "eskna.ucpjdhivl.com",
             "yvhcn.hxjebagrv.com",
@@ -106,6 +106,7 @@ class XuperApiClient(context: Context) {
             "nxiqj.jgrqyxupl.com",
             "hbyyqx.qtg20rybb.xyz",
             "emowvv.dqiswip4.xyz",
+            // Old pool portalCore (version-gated portal200001)
             "dfcsq.divqohamz.com",
             "sfgknh.qho3cnsyil.com",
             "rokbd.ysrkwctjg.com",
@@ -118,6 +119,34 @@ class XuperApiClient(context: Context) {
             "mptec.dhkrxuzcy.com",
             "xsvs.evlslb.com",
             "xsvs.vfltbr.com",
+            // Session 10 heap dump — 27 new obfuscated domains resident in app memory
+            "banamyi.vb1kivdlvc.com",
+            "bmagon.sxcrwendu.com",
+            "cdsr.higoesutn.com",
+            "cmhg.ilnpknzq.com",
+            "cxdgdx.zobpngkth.com",
+            "eajmnp.hcgv1dt8.com",
+            "ebgpbvi.cdun5kmepb.com",
+            "ernsm.prxmnvhcy.com",
+            "fmvokdm.0bs094t26.com",
+            "fwmlba.athi5owcm.com",
+            "hgfc.pvwacsgqh.com",
+            "ioermd.l7hsgo8g.com",
+            "jpktl.gczpjqyfu.com",
+            "krdwvd.swcaw7qx.com",
+            "mygd.ihfjsrkdw.com",
+            "nmgt.ubpvfh3tio.com",
+            "ogvkxy.4kcvozfrt.com",
+            "omhjhf.makzjefvo.com",
+            "qimg.83xkvhlta.com",
+            "sgufg.ijlvbuaqm.space",
+            "sgyc.bfj1k2g4v.com",
+            "suzhjnc.55tbiuxp.xyz",
+            "vnhd.uhfoadysw.com",
+            "yuwc.swzablvpm.com",
+            "zerif.qwcjdungi.com",
+            "zrrwwxn.trav6mukcl.com",
+            "d1t5kow2rdtotr.cloudfront.net",
         )
     }
 
