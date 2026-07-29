@@ -1,14 +1,115 @@
 # Next Blocker — XuperPlugin portalCore
 
-## Status (2026-07-29 session 14 — lever close)
+## Status (2026-07-29 session 15 — real disasm, vtable+0x40 genuinely fixed, new true blocker found)
 
-**Dalvik/SNI/static-DES host discovery exhausted.** Notice hosts solved without DES.
-**Unidbg lever fixed:** exported `JNI_OnLoad` stubs to `0x12043544`; Thumb `callFunction(0x43545)`
-works; harness can force `JNI_VERSION_1_6` — but **natives are not registered** (init still
-hits NULL `vtable+0x40` → `kill()` retry). **Next:** fix that object/vtable so JNI completes
-naturally → `N.b2b` → DES/portal domain.
+**vtable+0x40 (the old P0) is SOLVED for real**, not hacked — verified via live capstone disasm
+of the self-decrypted code (previous sessions never had ground truth here, only guesses).
+**New true blocker:** JNI_OnLoad's inline anti-tamper code unconditionally reaches a
+`kill(pid, SIGKILL)` syscall that **unidbg deliberately treats as non-returning** — no
+register/memory patch can neutralize it after the fact. Need to find the real, earlier gate
+that a legitimately-initialized singleton would satisfy to avoid this code path altogether.
 
 Full log: [`SESSION-2026-07-29.md`](SESSION-2026-07-29.md). Handoff: [`HANDOFF.md`](HANDOFF.md).
+
+---
+
+## Session 15 — ground-truth disasm + real vtable fix + new kill() blocker (2026-07-29 ~17:55–18:30)
+
+Previous sessions guessed at the meaning of `0x120370c0`'s "singleton/vtable+0x40" from static
+byte dumps taken **before** self-decryption ran, and from stale file-offset disasm. This session
+dumped the **runtime, post-decryption** bytes directly from the live unidbg process (after
+`JNI_OnLoad` executes, since ctors decrypt this code as a side effect) and ran real capstone
+disasm against them over SSH. That produced exact, verified ground truth for the first time.
+
+### Verified disasm: `0x120370ba`–`0x120370e0` (the vtable+0x40 check)
+```
+0x120370ba: ldr r0,[pc,#0x30]   ; r0 = literal
+0x120370bc: add r0,pc           ; r0 = GOT slot 0x12082340  (resolved: pc(0x120370c0)+lit(0x4b280))
+0x120370be: ldr r0,[r0]         ; r0 = P1 = *(0x12082340)
+0x120370c0: ldr r0,[r0]         ; r0 = P2 = *P1            <- the real "singleton" object
+0x120370c2: ldr r1,[r0,#0x40]   ; r1 = *(P2+0x40)          <- the vtable slot (was NULL)
+0x120370c4: mov r0,r5           ; r0 OVERWRITTEN with r5 (JavaVM*) - "obj(r0)" seen at the
+                                ;   call site is a red herring, NOT the vtable object
+0x120370c6: blx r1              ; call
+0x120370c8: ldr r0,[sp]
+0x120370ca: bl #0x12037878      ; another check right after
+0x120370ce..: cmp/compare, success path returns; else `blx #0x1207b310`
+```
+Harness already sets `*0x12082340=sa(0x120868e0)`, `*sa=sb(0x120868f0)` → so **P1=sa, P2=sb**.
+Session 14 called `sb` the "classname buffer" — correct, ctors write a string there, so
+`P2+0x40` was naturally NULL. That's the real bug, now fixed for real (see below) — **not**
+by PC-skipping the `blx` (session 14's approach), but by populating the actual memory the
+real instructions read, so the call executes with full real semantics (real LR, real return).
+
+### Real fixes applied (in `_scratch/Unpack.java`, all verified by dumping the values back)
+1. **`VTABLE_STUB`** — 4-byte Thumb stub `movs r0,#1; bx lr` written into the SCRATCH page
+   (mapped R|W|**X** now, was R|W only). This is a genuine, valid, callable function — not a
+   PC-skip.
+2. **`P2+0x40` (`0x12086930`) = VTABLE_STUB|1`** — written *before* calling `JNI_OnLoad`, so
+   `blx r1` at `0x120370c6` now calls real code and returns normally (verified: hook log shows
+   `r1 already valid (pre-write worked), no override`).
+3. **`P2+0x188` (`0x12086a78`) = SCRATCH ptr (non-zero)** — a second guard found via disasm of
+   `0x12037a80` (`ldr r0,[r0,#0x188]; cmp r0,#0; beq →kill()`). Was 0 (CTOR-PATCH only ever
+   wrote a *different* object's `+0x188`, at `0x120923c0`, never P2's). Fixing this skips one
+   of the early direct-to-kill() branches (verified via trace hook: `cmp-r0-after-P2+0x188 (r0)
+   = 0x7f000000`, non-zero, branch not taken).
+4. **`P2+0x109` (`0x120869f9`) = 0`** — a third guard, read inside the kill()-block itself
+   (`ldrb r0,[r0,#0x109]; cbz r0,→skip-abort-detour`). Zeroed to skip the extra SIGABRT(6) call.
+
+### New true blocker: unconditional `kill(pid, SIGKILL)`, confirmed via live experiment
+Even with all 3 object fields correctly populated, execution still reaches `0x12037b80` and
+issues `kill(pid, 9)`. Traced the **entire branch chain** with trace-only hooks (no `jniPhase`
+side effects) to find out why:
+```
+0x12037a92-9c: r8 = *(0x12082340) = P1(sa)      ; SAME got-chain, one less deref than P2
+0x12037a9c-a0: r0 = *(*(r8)+0x188) = *(P2+0x188) ; our fix #3 above → non-zero → branch #1 skipped
+0x12037aa8-ae: blx #0x1207b5a0 (forced ret=1 by an existing session-13 hook) → branch #2 skipped
+0x12037ab2-bc: real getpid() svc → r4 = pid (e.g. 0x171f = 5905)
+0x12037abe-c2: r5 = literal constant 0xfffff000 (resolved via disasm); cmp r0(pid),r5; bls
+               → ALWAYS TAKEN (any real pid ≪ 0xfffff000) → unconditionally jumps to 0x12037b4a
+```
+Critically, this `bls` branch target is **`0x12037b4a`, not `0x12037b40`** — it skips the
+`movs r4,#0` reset at `0x12037b42`, so **r4 keeps the real pid** all the way to the final
+`svc` at `0x12037b88` (`kill(r4=realpid, r1=9)`). This branch is **unconditional** (the
+0xfffff000 threshold is not a real gate, it's a "this is always true" pid-vs-huge-constant
+check) — meaning **every path that reaches `0x12037a92` ends in a real `kill(pid,9)`**,
+regardless of the P2 object fields.
+
+**Direct experiment (proves this is not patchable post-hoc):** temporarily let the real `svc`
+execute instead of PC-skipping it. Result:
+```
+java.lang.UnsupportedOperationException: SIGKILL pid=5919 is fatal and does not return (emulated abort)
+	at com.github.unidbg.linux.AndroidSyscallHandler.kill(AndroidSyscallHandler.java:712)
+```
+unidbg **deliberately** models `kill(_, SIGKILL)` as non-returning (matches real Linux: SIGKILL
+can't be caught). No register or memory patch after the `svc` can undo this — the only real
+fix is preventing this code from being *reached* at all. Reverted this experiment; harness is
+back to the existing (session 13) soft-ret + forced-`JNI_VERSION_1_6` fallback, which works but
+means we still get a **forced**, not natural, completion — so `RegisterNatives` still never
+fires and `N.l`/`N.b2b` remain unregistered (same symptom as session 14, different, now fully
+understood root cause).
+
+### Do NOT (session 15 additions)
+- Don't try to "fix" the `getpid()`-vs-`0xfffff000` compare — it's not a real gate, always true.
+- Don't let the real `svc #0` execute at `0x12037b5e`/`0x12037b88` — unidbg throws, confirmed.
+- Don't confuse `obj(r0)` at the `0x120370c6` `blx` hook with the vtable object — it's `r5`
+  (JavaVM*), overwritten right before the call. The real object is `P2` (`=*(*(0x12082340))`).
+
+### Next steps (ordered) — session 16
+1. **Find what CALLS into `0x12037a80`/`0x12037a92`** (the block establishing `r8` from the GOT
+   chain) and what condition, in a genuinely fully-initialized object, makes that caller skip
+   this whole anti-tamper region entirely. Static/live disasm of the code just *before*
+   `0x12037a80` (not yet dumped this session) is the natural next step — same technique used
+   this session (dump post-decryption runtime bytes → SSH capstone) works fine, just aim it
+   further back.
+2. Once that gate is found and satisfied, confirm `RegisterNatives` actually fires (watch for
+   unidbg's DVM machinery reporting registered natives, or simply retry `N.l`/`N.b2b` calls).
+3. Only then: `N.b2b(ijiami.dat)` → DES key + portal domain → plugin probe.
+
+### Reproduce (updated for session 15's harness)
+Same as before — `_scratch/Unpack.java` + `_scratch/run_lever_remote.py`, unchanged interface.
+The new diagnostics (`[trace] ...` lines, `VTABLE_SLOT_40`/`P2_SLOT_188`/`P2_SLOT_109` prints)
+are gated so they don't affect behavior, just visibility.
 
 ---
 
