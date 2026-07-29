@@ -7,12 +7,12 @@ StreamVault) — no email registration, no VIP paywall, no forced updates.
 It authenticates against XTV's backend using captured session tokens, fetches the
 live playlist, and serves standard HLS locally via a built-in proxy.
 
-## Status — 2026-07-27 (session 10)
+## Status — 2026-07-29 (session 14)
 
-- ✅ Win11 build + deploy; **19-host** bootstrap probe with honest **`[SYN]`** / **`[FAIL]`** tags
-- ✅ Cold-start tcpdump pipeline on `.4` (`_session/capture_portal.sh`, `portal_cold.pcap`)
-- ✅ `scripts/deep_analyze_pcap.py` — SNI, HTTP Host, sgyc/ycout request detail
-- ⛔ **Blocker:** no `returnCode=0` on any bootstrap host; portalCore likely **TLS + opaque path** — [NEXT-BLOCKER.md](NEXT-BLOCKER.md), [SESSION-2026-07-27.md](SESSION-2026-07-27.md)
+- ✅ Heap scan: CDN vs portal clarified; notice hosts without DES; bootstrap cleaned
+- ✅ Unidbg: real `JNI_OnLoad` @ `0x12043544` reached (Thumb); forced VERSION possible
+- ⛔ **Blocker:** NULL `vtable+0x40` → no `RegisterNatives` → no DES/portal FQDN yet
+- ⛔ Pool hosts still `portal200001` — [NEXT-BLOCKER.md](NEXT-BLOCKER.md), [SESSION-2026-07-29.md](SESSION-2026-07-29.md), [HANDOFF.md](HANDOFF.md)
 
 ## How it works
 
@@ -32,10 +32,11 @@ Full detail (hosts, cookies, formats, capture method) in [ARCHITECTURE.md](ARCHI
 
 | Doc | What |
 |-----|------|
-| [HANDOFF.md](HANDOFF.md) | **Start here** — Win11 orchestration, topology, build loop, session 7 TL;DR |
-| [SESSION-2026-07-27.md](SESSION-2026-07-27.md) | **Latest session** — wire capture achievements, blockers, next steps |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Stream pipeline, cookies, MITM method, **2026-07-27 wire host pool** |
-| [NEXT-BLOCKER.md](NEXT-BLOCKER.md) | Current blocker (version gate / 403), probe table, archive of sessions 1–6 |
+| [HANDOFF.md](HANDOFF.md) | **Start here** — Win11 orchestration, topology, session TL;DR |
+| [SESSION-2026-07-29.md](SESSION-2026-07-29.md) | **Latest session** — lever fix, findings, next steps |
+| [NEXT-BLOCKER.md](NEXT-BLOCKER.md) | Current blocker + session archive |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Stream pipeline, cookies, MITM method, wire host pool |
+| [SESSION-2026-07-27.md](SESSION-2026-07-27.md) | Earlier session notes |
 
 ## Source layout (`app/src/main/java/com/xuper/plugin/`)
 

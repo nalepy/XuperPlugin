@@ -1,0 +1,70 @@
+# portalCore API hostname hunt — 192.168.100.4:5555
+# Date: 2026-07-29 ~16:27–16:38 -03 (mgstv PID 13810, app_ver 43405)
+
+## Goal
+Absolute portal API host for paths like api/portalCore/v6/getLiveData (not CDN main_addr).
+
+## Methods run
+1. Channel zap (KEYCODE_CHANNEL_UP 166 ×5) + netstat/ss on com.android.mgstv
+2. Dalvik heap scan (~545 MB, PID 13810) via /proc/PID/mem [anon:dalvik-main space]
+3. strings grep: portalCore, OkHttp, service_name portal, absolute URL patterns
+4. Cold start tcpdump 50s → _session/portal_hunt_cold.pcap (982 pkts)
+5. Win11 HTTPS probe getLiveData (3DES body, spkgVer=sysVersion stamp)
+
+## Heap / OkHttp (live session, post-zap)
+- Relative API paths only (no `https://HOST/api/portalCore` anywhere in heap):
+  api/portalCore/v6/getLiveData, v8/login, v15/getSlbInfo, getFavorite, v3/getColumnContents, device/updateOrInsert
+- getLiveDataSuccess present → getLiveData completed on-device during session
+- portal JSON logs: service_name":"portal" with url":"/api/portalCore/..." (relative only)
+- OkHttp connection hostnames (unique): **sfgknh.qho3cnsyil.com** (+ Writer/Push Observer variants)
+- Also in heap: emowvv|espjey failover string, dfcsq, espjey, rokbd/vgwbm (EPG), 34fhwevf (CDN main_addr in play tokens)
+- Absolute portalCore URL grep: **zero hits**
+
+## Established peers during zap (netstat, mgstv)
+Cloudflare / ancillary (not portal API):
+- 172.67.130.109:443 ↔ 34fhwevf.cbcf4gg3f.com (CDN main_addr, known false positive)
+- 104.18.53.7:80, 104.21.31.213:443, 104.21.89.119:443, 172.67.x / 104.21.x :80
+- 108.181.237.226:8119 (non-443 streaming/P2P class)
+- 23.239.109.66:80 gorillaservers static
+- DNS resolvers (8.8.8.8, 1.1.1.1, 9.9.9.10, 223.5.5.5)
+No peer mapped to a **new** portal FQDN; IPs align with CF fronting for known CDN/P2P/ancillary hosts.
+
+## Cold-start TLS SNI (_session/portal_hunt_cold.pcap, deep_analyze_pcap.py)
+| SNI | IP | Classification |
+|-----|-----|----------------|
+| emowvv.dqiswip4.xyz | 104.21.85.241 | portal pool (known) |
+| sxowvd.jzvqwcyor.com | 104.21.31.213 | portal pool |
+| eskna.ucpjdhivl.com | 104.21.89.119 | ancillary / 404 on portalCore |
+| 34fhwevf.cbcf4gg3f.com | 172.67.130.109 | CDN main_addr (false positive) |
+| sgyc.bfj1k2g4v.com | HTTP /v1/imagine | P2P WS (false positive) |
+Cleartext HTTP: rokbd, vgwbm, nxiqj, iyut, yvhcn, ycout, zxiws — ancillary, not portalCore.
+**No new portalCore SNI** beyond existing pools/CDN/P2P.
+
+## HTTPS probe getLiveData (/api/portalCore/v6/getLiveData, Win11)
+| Host | HTTPS result | returnCode / notes |
+|------|----------------|-------------------|
+| sfgknh.qho3cnsyil.com | 403 Forbidden | OkHttp peer during zap; image URL in heap; **not** JSON portal |
+| emowvv.dqiswip4.xyz | 200 | **portal200001** (plaintext JSON) |
+| sxowvd.jzvqwcyor.com | 200 | **portal200001** |
+| dfcsq.divqohamz.com | 200 | **portal200001** |
+| espjey.ysnihrwtg.com | 200 | **portal200001** |
+| eskna.ucpjdhivl.com | 404 | not portal API path |
+
+## Conclusion
+**No NEW portal API FQDN** surfaced in this hunt window.
+
+Runtime evidence:
+- Portal calls use **relative** paths in JVM heap; hostname likely resolved/stored in **native** or pinned OkHttp layer without retaining full absolute URL in dalvik-main.
+- During **zap**, the only OkHttp-named host is **sfgknh.qho3cnsyil.com** (403 on portalCore from Win11 — WAF/geo, not 404 CDN).
+- During **cold start**, TLS SNI shows **emowvv / sxowvd** (and CDN **34fhwevf**); probes confirm emowvv/sxowvd/dfcsq/espjey **accept** portalCore/v6/getLiveData with **portal200001** (version gate), i.e. they are portal API fronts, not new discoveries.
+- getLiveDataSuccess on-device without absolute URL in heap supports **host ≠ CDN main_addr** and **host not left as cleartext** in scanned JVM regions.
+
+## Artifacts
+- _session/portal_hunt_cold.pcap
+- /data/local/tmp/portal_hunt.log (on device)
+- hostscan.bin removed from /data (freed ~545 MB)
+
+## Next if hunt continues
+- Native heap / libexec.so strings during getLiveData; or Frida SSL_read on pinned client
+- tcpdump SNI **during** explicit live-column refresh (not only channel-up)
+- BBDatabase domain_DES decrypt at runtime for portal (not notice-only)

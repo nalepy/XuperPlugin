@@ -1,6 +1,129 @@
 # Next Blocker — XuperPlugin portalCore
 
-## Status (2026-07-29 session 12)
+## Status (2026-07-29 session 14 — lever close)
+
+**Dalvik/SNI/static-DES host discovery exhausted.** Notice hosts solved without DES.
+**Unidbg lever fixed:** exported `JNI_OnLoad` stubs to `0x12043544`; Thumb `callFunction(0x43545)`
+works; harness can force `JNI_VERSION_1_6` — but **natives are not registered** (init still
+hits NULL `vtable+0x40` → `kill()` retry). **Next:** fix that object/vtable so JNI completes
+naturally → `N.b2b` → DES/portal domain.
+
+Full log: [`SESSION-2026-07-29.md`](SESSION-2026-07-29.md). Handoff: [`HANDOFF.md`](HANDOFF.md).
+
+---
+
+## Session 14 — unidbg lever fix (2026-07-29 ~17:00–17:50)
+
+| Wrong assumption | Reality |
+|------------------|---------|
+| Export @ `0x1203725d` = anti-tamper to PC-skip | **`b.w #0x12043544`** — real JNI body |
+| `0x1202e39d` = hang loop | **`open("/proc/self/wchan")`**; V50 PC-skip broke open |
+| Permanent `bx lr` @ stub | Aborts JNI when LR = unidbg sentinel |
+| `callFunction(0x43544)` | Even = ARM → bogus SWI `0x3b5f0`; use **`0x43545`** |
+| Forced `JNI_VERSION` = done | **No** — `RegisterNatives` skipped; `N.l`/`N.b2b` missing |
+
+**Working recipe:** `_scratch/Unpack.java` + `_scratch/run_lever_remote.py` on `.40`.
+After load: patch `push.w`@`0x12043548`; soft-skip null `blx r1`@`0x120370c6`; soft-ret
+`kill()`@`0x12037b80` (2nd hit → force `0x10006`+sentinel). Log shows forced SUCCESS.
+
+### Next (ordered) — current
+
+1. **P0:** Populate singleton/vtable so `[obj+0x40]` is callable — init check must pass without `kill()`.
+2. Confirm `RegisterNatives` for `s/h/e/l/l/N` (`l`, `b2b`).
+3. `N.b2b(ijiami.dat)` → dump DEX; scan DES key + portal FQDN.
+4. Plugin probe until `returnCode=0` → product path.
+
+**Do not:** PC-skip wchan `0x1202e39d`; prefer UnpackV50 load path; even JNI offset; re-hunt dalvik hosts; re-brute notice DES.
+
+---
+
+## Session 14 — heap pivot + audit of prior mistakes (2026-07-29)
+
+| Prior mistake | Correction |
+|---------------|--------------|
+| Treat `34fhwevf` / tcpdump SNI as portal API host | Heap: `main_addr=34fhwevf…` on **signed CDN URLs**; HTTP/HTTPS `/api/portalCore/*` → **404** |
+| Re-added `sgyc` to bootstrap | Heap: `p2p_main_addr=sgyc…` WebSocket tracker only |
+| TeleLatino / Brasil hosts first in XTV bootstrap | Probed with XTV `userToken` → misleading 403; moved to `SISTER_APP_HOSTS` |
+| `d1t5kow2rdtotr.cloudfront.net` in bootstrap | `spared_addr` CDN only |
+| Comment: wire path encrypted | **Wrong** — paths plaintext; **body** 3DES (matches NEXT-BLOCKER) |
+| Blocker: “OkHttp TLS fingerprint” | Same client gets JSON `portal200001` — **version gate**, not TLS mimicry |
+| unidbg as only host-discovery path | **Heap scan** finds API paths + CDN map in minutes on `.4` |
+
+### Heap artifacts (`.4`, PID live Home)
+- Tooling: `_session/heap_hostscan.sh`, `_session/heap_extract.sh`, `_session/heap_portal.txt`
+- `getLiveDataSuccess`, `api/portalCore/v15/getSlbInfo`, v6/v8/v3 paths
+- Failover config strings: `emowvv.dqiswip4.xyz|espjey.ysnihrwtg.com`, etc.
+
+### Plugin changes
+- `PORTAL_BOOTSTRAP_HOSTS` trimmed (~45 XTV-relevant); `SISTER_APP_HOSTS` separated
+- `probePortalBootstrap()`: **`getSlbInfo` line per host** before auth/live
+
+### Session 14 cont — spkgVer + TeleLatino + BBDatabase (2026-07-29 ~16:20)
+
+| Action | Result |
+|--------|--------|
+| Patch `spkgVer` = sysVersion stamp + fresh userToken; reinstall + probe | Still **`portal200001`** on dfcsq/emowvv/espjey/… |
+| `BBDatabase.EventDbModel` `app_api` row | `domain\|DES=Sz0JjjU4…` for **`/notice/api/get_notice`** (status 50012) |
+| TeleLatino `classes.dex` | SecNeo: **7 class_defs**, 20MB strings — jadx useless for domain crypto |
+| Notice-context DES key tries | 33 keys, **0 hits** |
+| GET `/notice/api/get_notice` on pool | 403/404 — no useful body |
+
+**Correction to earlier narrative:** decrypting `domain|DES` yields the **notice** API host
+(telemetry/notices), which may share DES key material with portal domain config but is not
+itself the portalCore SLB hostname.
+
+Artifacts: `_session/BBDatabase.db`, `_session/TeleLatino.apk`, `_session/heap_domain.txt`,
+`scripts/parse_bbdatabase.py`, `scripts/des_notice_keys.py`.
+
+---
+
+### Session 14 cont — heap notice ctx ([heap dump near DES blob](959e6e9f-889e-40d6-8ff9-dde4ca62a283))
+
+**Resolved without DES key:** live heap shows plaintext notice URLs:
+
+- `http://zxiws.tcgwhnvym.com/notice/api/get_notice?pkg=…&v=43405&sn=…`
+- `http://nxiqj.jgrqyxupl.com/notice/api/get_notice?…`
+
+`Sz0JjjU4…` remains ciphertext in the same cluster as `Host: zxiws…` + BB `httpStatus=50012`.
+Decrypt key still useful for EPG blobs (`4hv+…`, `MP5T…`) and any portal domain|DES, but
+**notice host discovery is done** — both hosts already in bootstrap (CF 522/timeout historically).
+
+Artifact: `_session/heap_notice_ctx.txt`
+
+---
+
+**Static DES expand ([notice host decrypt and probe](ef005fa5-6c6f-4d8b-bd8b-83a522482c7f)):**
+**MISS** — 5,000 keys × 3 blobs, 0 last-block hits, 0 encrypt-matches to known notice hosts.
+Script: `scripts/des_bruteforce_expand.py`. Key is **not** derivable from envelope/config fields;
+continue unidbg / native only.
+
+---
+
+**Portal host hunt ([portal host native heap hunt](3374492b-6628-4ec6-8291-f6d78989dde0)):**
+**Conclusive negative** — no new portal API FQDN. Heap has relative `api/portalCore/*` only;
+cold SNI = known pool (`emowvv`/`sxowvd`) → `portal200001`; `sfgknh` OkHttp peer → portalCore **403**.
+Report: `_session/portal_host_hunt.txt`. Dalvik-only host discovery is exhausted.
+
+---
+
+**Unidbg v50 (superseded by lever fix above):**
+`_scratch/UnpackV50.java` multi-level hooks stalled on wchan PC-skip regression.
+**Use `_scratch/Unpack.java`**, not V50, for continued work.
+
+---
+
+### Parallel session 14 sweep — closed
+
+| Track | Result |
+|-------|--------|
+| Heap near DES blob | Notice hosts = `zxiws` / `nxiqj` (plaintext); DES still needed for other blobs |
+| Static DES 5k keys | MISS |
+| Portal host hunt | Conclusive negative (dalvik/SNI) |
+| Unidbg lever | Real JNI entered; forced VERSION; **vtable+0x40 still blocks RegisterNatives** |
+
+---
+
+## Status (archive — session 12)
 
 **Full API pipeline mapped. 3DES body crypto proven against real servers. 65+ hosts
 probed across 4 apps, 2 regions — version gate is universal. DES domain key encrypted

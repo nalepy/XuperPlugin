@@ -4,9 +4,12 @@ import com.github.unidbg.arm.backend.Backend;
 import com.github.unidbg.arm.backend.Unicorn2Factory;
 import com.github.unidbg.arm.backend.CodeHook;
 import com.github.unidbg.arm.backend.WriteHook;
+import com.github.unidbg.file.FileResult;
+import com.github.unidbg.file.IOResolver;
 import com.github.unidbg.linux.android.*;
 import com.github.unidbg.linux.android.dvm.*;
 import com.github.unidbg.linux.android.dvm.array.ByteArray;
+import com.github.unidbg.linux.file.ByteArrayFileIO;
 import com.github.unidbg.memory.Memory;
 import unicorn.ArmConst;
 import unicorn.UnicornConst;
@@ -158,6 +161,12 @@ public class Unpack extends AbstractJni {
         }
     }
 
+    private static byte[] le32(long v) {
+        return new byte[] {
+                (byte) (v), (byte) (v >> 8), (byte) (v >> 16), (byte) (v >> 24)
+        };
+    }
+
     public Unpack() throws Exception {
         AndroidEmulator emulator = AndroidEmulatorBuilder.for32Bit()
                 .setProcessName("com.android.mgstv")
@@ -174,36 +183,124 @@ public class Unpack extends AbstractJni {
 
         final long SCRATCH = 0x7f000000L;
         backend.mem_map(SCRATCH, 0x1000, UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE);
+        // Absorb null+offset reads (e.g. [0x109] during JNI) instead of UC_ERR_READ_UNMAPPED
+        try {
+            backend.mem_map(0L, 0x1000, UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE);
+            System.out.println(">>> mapped page0 for null-offset reads");
+        } catch (Throwable t) {
+            System.out.println(">>> page0 map skipped: " + t);
+        }
         byte[] nameBytes = "com.android.mgstv\0".getBytes();
         backend.mem_write(SCRATCH, nameBytes);
         System.out.println(">>> scratch string ptr=0x"+Long.toHexString(SCRATCH));
 
-        // ---- APPROACH J: permanent bx lr patch at crash site ----
-        // Write bx lr (0x4770) at 0x1203725c BEFORE library loads.
-        // Any code path reaching here returns immediately (via bx lr -> unidbg sentinel 0xffff0000).
-        // No hook needed — the patch is permanent in emulated memory.
-        byte[] bxLr = new byte[]{(byte)0x70, (byte)0x47};  // bx lr (Thumb)
-        // Can't write yet — memory not mapped. Will write after loadLibrary maps the region.
-        // Instead, use a WriteHook to patch on first write to the code page, OR
-        // use a one-shot CodeHook that writes bx lr then unhooks.
-        final boolean[] patched = new boolean[1];
+        // ---- LEVER: exported JNI_OnLoad @ 0x1203725d is `b.w #0x12043544` ----
+        // Do NOT NOP that site. init_array: return via sentinel. JNI: jump to real target.
+        final long STUB_PC = 0x1203725cL;
+        final long REAL_JNI_ONLOAD = 0x12043544L;
+        final long BL_CALLEE_F8EC = 0x1203f8ecL; // bl'd from 0x1202e4b6; null-fetches inside
+        final boolean[] jniPhase = new boolean[1];
+        final boolean[] initHit = new boolean[1];
+        final int[] hitCount = new int[1];
+
+        emulator.getSyscallHandler().addIOResolver(new IOResolver() {
+            @Override
+            @SuppressWarnings({"rawtypes", "unchecked"})
+            public FileResult resolve(Emulator emulator, String pathname, int oflags) {
+                if ("/proc/self/wchan".equals(pathname)) {
+                    return FileResult.success(new ByteArrayFileIO(oflags, pathname, "0\n".getBytes()));
+                }
+                if ("/proc/self/status".equals(pathname)) {
+                    String s = "Name:\tmgstv\nState:\tS\nPid:\t1\nPPid:\t0\nTracerPid:\t0\n";
+                    return FileResult.success(new ByteArrayFileIO(oflags, pathname, s.getBytes()));
+                }
+                return null;
+            }
+        });
+
         backend.hook_add_new(new CodeHook() {
             public void hook(Backend b, long addr, int sz, Object u) {
-                if (!patched[0]) {
-                    b.mem_write(0x1203725cL, new byte[]{(byte)0x70, (byte)0x47});
-                    patched[0] = true;
-                    System.out.println(">>> PERMANENT: wrote bx lr at 0x1203725c");
-                    // Don't resume — let bx lr execute via PC=0x1203725c
-                    b.reg_write(ArmConst.UC_ARM_REG_PC, 0x1203725cL);
-                } else {
-                    // Already patched, just let bx lr execute (it's already there)
-                    b.reg_write(ArmConst.UC_ARM_REG_PC, 0x1203725cL);
+                long lr = backend.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                int n = ++hitCount[0];
+                if (jniPhase[0]) {
+                    // Thumb entry must set CPSR.T via PC|1 — even PC runs as ARM and blows up as svc.
+                    backend.reg_write(ArmConst.UC_ARM_REG_LR, 0xffff0000L);
+                    backend.reg_write(ArmConst.UC_ARM_REG_PC, REAL_JNI_ONLOAD | 1L);
+                    if (n <= 40) {
+                        System.out.println(">>> stub #" + n + " -> REAL_JNI 0x"
+                                + Long.toHexString(REAL_JNI_ONLOAD)
+                                + "|1 wasLR=0x" + Long.toHexString(lr));
+                    }
+                    return;
                 }
+                boolean goodLr = (lr >= 0x12000000L && lr < 0x12200000L);
+                long resume = goodLr ? lr : 0xffff0000L;
+                backend.reg_write(ArmConst.UC_ARM_REG_R0, 0L);
+                backend.reg_write(ArmConst.UC_ARM_REG_PC, resume);
+                if (n <= 40) {
+                    System.out.println(">>> stub #" + n + " init LR=0x" + Long.toHexString(lr)
+                            + " -> PC=0x" + Long.toHexString(resume));
+                }
+                if (!initHit[0]) initHit[0] = true;
             }
             public void onAttach(com.github.unidbg.arm.backend.UnHook u) {}
             public void detach() {}
-        }, 0x1203725cL, 0x1203725cL, null);
-        System.out.println(">>> PERMANENT: one-shot bx lr patcher at 0x1203725c");
+        }, STUB_PC, STUB_PC, null);
+        System.out.println(">>> LEVER: stub->0x12043544, callee 0x1203f8ec soft-return");
+
+        // NOTE: do NOT CodeHook 0x12043548 — Unicorn2 installs svc trampolines for code hooks;
+        // that produced bogus `svc number: 0x3b5f0` on the push.w site. Patch bytes instead.
+
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0]) return;
+                long lr = backend.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                backend.reg_write(ArmConst.UC_ARM_REG_R0, 0L);
+                backend.reg_write(ArmConst.UC_ARM_REG_PC, lr);
+                if (n++ < 8) {
+                    System.out.println(">>> soft-ret @0x1203f8ec #" + n
+                            + " -> LR=0x" + Long.toHexString(lr));
+                }
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, BL_CALLEE_F8EC, BL_CALLEE_F8EC, null);
+
+        // Null-call: 0x120370c6 blx r1 when vtable+0x40 is NULL (LR lands at 0x120370c9)
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0]) return;
+                backend.reg_write(ArmConst.UC_ARM_REG_R0, 1L); // non-zero: avoid fail→SIGKILL path
+                backend.reg_write(ArmConst.UC_ARM_REG_PC, 0x120370c9L);
+                if (n++ < 16) {
+                    long r1 = backend.reg_read(ArmConst.UC_ARM_REG_R1).longValue();
+                    System.out.println(">>> skip blx-r1 @" + Long.toHexString(address)
+                            + " #" + n + " r1=0x" + Long.toHexString(r1) + " ret=1");
+                }
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x120370c6L, 0x120370c6L, null);
+
+        // kill() svc site CodeHook unused — mem NOP at 0x12037b8a instead (preserve frame)
+
+        // Soft-skip SIGKILL site seen by DumpWchan
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                long lr = backend.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                long resume = (lr >= 0x12000000L && lr < 0x12200000L) ? lr : (address + 2);
+                backend.reg_write(ArmConst.UC_ARM_REG_R0, 0L);
+                backend.reg_write(ArmConst.UC_ARM_REG_PC, resume);
+                if (n++ < 8) {
+                    System.out.println(">>> SKIP SIGKILL@0x1203a2de -> 0x" + Long.toHexString(resume));
+                }
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x1203a2deL, 0x1203a2e0L, null);
 
         // Sanity function
         backend.hook_add_new(new CodeHook() {
@@ -278,13 +375,82 @@ public class Unpack extends AbstractJni {
         try {
             dm = vm.loadLibrary(so, true);
             System.out.println(">>> loadLibrary returned base=0x"+Long.toHexString(dm.getModule().base));
+            try {
+                com.github.unidbg.Module mod = dm.getModule();
+                com.github.unidbg.Symbol jniSym = mod.findSymbolByName("JNI_OnLoad", false);
+                System.out.println(">>> JNI_OnLoad symbol=" + (jniSym == null ? "null"
+                        : ("0x" + Long.toHexString(jniSym.getAddress()))));
+            } catch (Throwable t) {
+                System.out.println(">>> JNI_OnLoad symbol lookup failed: " + t);
+            }
+            try {
+                for (long ea : new long[]{0x1202e2b0L, 0x1202e4b0L, 0x12037250L, 0x12043544L, 0x1203f8ecL, 0x120370b0L, 0x12037b80L, 0x12037aa0L}) {
+                    byte[] chunk = backend.mem_read(ea, 32);
+                    System.out.print(">>> MEM@0x" + Long.toHexString(ea) + ": ");
+                    for (byte x : chunk) System.out.printf("%02x", x & 0xff);
+                    System.out.println();
+                }
+            } catch (Throwable t) {
+                System.out.println(">>> MEM dump failed: " + t);
+            }
+            // Unicorn2 chokes on push.w {r8,r9,r10} @ 0x12043548 (bogus SWI 0x3b5f0).
+            // Replace with: sub sp, #12; nop  (keep frame size; epilogue pop loads garbage — ok).
+            try {
+                byte[] before = backend.mem_read(0x12043548L, 4);
+                System.out.print(">>> before push.w patch: ");
+                for (byte x : before) System.out.printf("%02x", x & 0xff);
+                System.out.println();
+                backend.mem_write(0x12043548L, new byte[]{
+                        (byte) 0x83, (byte) 0xb0, // sub sp, #0xc
+                        (byte) 0x00, (byte) 0xbf  // nop
+                });
+                byte[] after = backend.mem_read(0x12043548L, 4);
+                System.out.print(">>> after push.w patch:  ");
+                for (byte x : after) System.out.printf("%02x", x & 0xff);
+                System.out.println();
+            } catch (Throwable t) {
+                System.out.println(">>> push.w patch failed: " + t);
+            }
+            // Don't rely on mem patch alone (Unicorn TB cache). Hook kill() entry.
+            // Caller retries kill in a loop — after first soft-ret, exit JNI Function32 cleanly.
+            final int[] killHits = new int[1];
+            backend.hook_add_new(new CodeHook() {
+                public void hook(Backend b, long address, int size, Object user) {
+                    long lr = backend.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                    int n = ++killHits[0];
+                    if (n >= 2) {
+                        // Break kill-retry loop: finish emulated JNI with JNI_VERSION_1_6
+                        backend.reg_write(ArmConst.UC_ARM_REG_R0, 0x00010006L);
+                        backend.reg_write(ArmConst.UC_ARM_REG_PC, 0xffff0000L);
+                        System.out.println(">>> kill() #" + n + " -> force JNI_VERSION + sentinel");
+                        return;
+                    }
+                    backend.reg_write(ArmConst.UC_ARM_REG_R0, 0L);
+                    backend.reg_write(ArmConst.UC_ARM_REG_PC, lr);
+                    System.out.println(">>> kill() entry soft-ret #" + n
+                            + " -> 0x" + Long.toHexString(lr));
+                }
+                public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                public void detach() {}
+            }, 0x12037b80L, 0x12037b80L, null);
             System.out.println(">>> calling JNI_OnLoad ...");
             long sb = 0x120868f0L, sa = 0x120868e0L;
             backend.mem_write(sa, new byte[]{(byte)sb,(byte)(sb>>8),(byte)(sb>>16),(byte)(sb>>24)});
             backend.mem_write(0x12082340L, new byte[]{(byte)sa,(byte)(sa>>8),(byte)(sa>>16),(byte)(sa>>24)});
             System.out.println(">>> FIX: GOT->singleton->buf");
-            dm.callJNI_OnLoad(emulator);
-            System.out.println(">>> JNI_OnLoad returned JNI_VERSION_1_6 (SUCCESS!)");
+            // Bypass export stub: call real Thumb JNI_OnLoad directly.
+            jniPhase[0] = true;
+            // Offset must be odd for Thumb — even 0x43544 runs as ARM and raises bogus SWI.
+            System.out.println(">>> jniPhase=true, callFunction REAL_JNI thumb 0x43545");
+            Number jniRet = dm.getModule().callFunction(emulator, 0x43545,
+                    ((com.github.unidbg.linux.android.dvm.VM) vm).getJavaVM(),
+                    null);
+            long jniVal = jniRet.longValue() & 0xffffffffL;
+            System.out.println(">>> REAL_JNI returned: 0x" + Long.toHexString(jniVal)
+                    + " (" + jniRet + ")");
+            if (jniVal == 0x00010006L) {
+                System.out.println(">>> JNI_OnLoad SUCCESS (JNI_VERSION_1_6)");
+            }
         } catch (Throwable t) {
             System.out.println(">>> loadLibrary/JNI_OnLoad threw: ");
             t.printStackTrace(System.out);

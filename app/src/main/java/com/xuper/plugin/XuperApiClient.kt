@@ -34,7 +34,8 @@ data class XuperConfig(
     val cookieS: String = "QDtRcPPKDAwtROdnoGlxRgXpj64ElYpBBNH0TIZO20TIcc",
     val cookieT: String = "kzDQKAgQI3UlOy-bl3ScQrOcu3NIHFGAY5PZ6xuoZ3z",
     val userId: String = "169355704",
-    val userToken: String = "1d66b674-7642-4c59-ab18-6215fbe57d94",
+    // Rotates on auto-login; refreshed from heap_zap getFavorite capture (2026-07-29).
+    val userToken: String = "6da3c458-b2de-4798-86a7-57028fb25b27",
     // --- getLiveData fields (captured from live app session) ---
     val columnId: Int = 76182,
     val dataVersion: String = "pre3194bfb81-899a-11f1-b41c-e7ba14321033LiveDataV6",
@@ -54,7 +55,8 @@ data class XuperConfig(
     // --- getAuthInfo/getLiveData request envelope (captured device fields, V76PRO) ---
     val appId: String = "com.android.msandroid",
     val apkVersion: String = "43405",
-    val spkgVersion: String = "43405",
+    // Live portal headers use sysVersion string here — NOT apkVersion (heap_zap getFavorite).
+    val spkgVersion: String = "2024-11-15 19:08:51_29_14.1_4.9.170",
     val appLanguage: String = "es",
     val model: String = "V76PRO",
     val product: String = "walley",
@@ -97,48 +99,31 @@ class XuperApiClient(context: Context) {
 
   companion object {
         /** CF-fronted portalCore hosts (session 6c); use DOH on Win11 if DNS fails. */
+        /** XTV portalCore bootstrap — not CDN/P2P (sgyc, cloudfront) or sister-app pools. */
         val PORTAL_BOOTSTRAP_HOSTS = listOf(
-            // TeleLatino DES-resolved hosts (from memory dump on .4)
-            "joqotx.p27i1en9.com",
-            "wetc.pvqox2zhlc.com",
-            // Brasil TV hosts (from memory dump on .4)
-            "bxvxjj.pzmsjhwvd.online",
-            "cqrkgyod.ne6dxwkmjb.com",
-            "esyte.jydfb8gtg.com",
-            "fafemfd.45ef74qn.com",
-            "fsylbm.34x6wc1u.com",
-            "gbwc.rkvdlyciz.com",
-            "mndrxt.my66vx6f.com",
-            "qlgof.hyazjrvos.com",
-            "qwjxhz.fawxkgdre.com",
-            "rybakz.qug1ubct.xyz",
-            "udxs.rasjvtzyp.com",
-            "wocx.gadmsubqt.com",
-            "wsoycw.satrfq4v.com",
-            "xcjyzh.hsfudelai.com",
-            "ytrsfg.fbq5tlk1.com",
-            // Cold-start tcpdump — TLS SNI candidates
-            "34fhwevf.cbcf4gg3f.com",
-            "eskna.ucpjdhivl.com",
-            "yvhcn.hxjebagrv.com",
-            "zxiws.tcgwhnvym.com",
-            "nxiqj.jgrqyxupl.com",
-            "hbyyqx.qtg20rybb.xyz",
-            "emowvv.dqiswip4.xyz",
-            // Old pool portalCore (version-gated portal200001)
+            // getSlbInfo entry points (version-gated but return JSON)
             "dfcsq.divqohamz.com",
-            "sfgknh.qho3cnsyil.com",
-            "rokbd.ysrkwctjg.com",
-            "iyut.xgw3sdzoac.com",
-            "vgwbm.uwfyobivh.com",
+            "emowvv.dqiswip4.xyz",
             "espjey.ysnihrwtg.com",
             "sxowvd.jzvqwcyor.com",
             "yrqucu.czxenpyba.com",
             "fuxok.nguvmqhpk.com",
             "mptec.dhkrxuzcy.com",
+            // Cold-start SNI / heap CDN main_addr (NOT portal API — 404 on /api/portalCore)
+            "34fhwevf.cbcf4gg3f.com",
+            "eskna.ucpjdhivl.com",
+            // CF / wire
+            "hbyyqx.qtg20rybb.xyz",
+            "sfgknh.qho3cnsyil.com",
+            "rokbd.ysrkwctjg.com",
+            "iyut.xgw3sdzoac.com",
+            "vgwbm.uwfyobivh.com",
+            "yvhcn.hxjebagrv.com",
+            "zxiws.tcgwhnvym.com",
+            "nxiqj.jgrqyxupl.com",
             "xsvs.evlslb.com",
             "xsvs.vfltbr.com",
-            // Session 10 heap dump — 27 resident domains
+            // Heap session 10 — portal-adjacent pool (still version-gated from plugin)
             "banamyi.vb1kivdlvc.com",
             "bmagon.sxcrwendu.com",
             "cdsr.higoesutn.com",
@@ -158,14 +143,32 @@ class XuperApiClient(context: Context) {
             "ogvkxy.4kcvozfrt.com",
             "omhjhf.makzjefvo.com",
             "qimg.83xkvhlta.com",
-            "sgufg.ijlvbuaqm.space",
-            "sgyc.bfj1k2g4v.com",
             "suzhjnc.55tbiuxp.xyz",
             "vnhd.uhfoadysw.com",
             "yuwc.swzablvpm.com",
             "zerif.qwcjdungi.com",
             "zrrwwxn.trav6mukcl.com",
-            "d1t5kow2rdtotr.cloudfront.net",
+        )
+
+        /** Sister-app hosts — do not probe with XTV userToken (misleading 403/404). */
+        val SISTER_APP_HOSTS = listOf(
+            "joqotx.p27i1en9.com",
+            "wetc.pvqox2zhlc.com",
+            "bxvxjj.pzmsjhwvd.online",
+            "cqrkgyod.ne6dxwkmjb.com",
+            "esyte.jydfb8gtg.com",
+            "fafemfd.45ef74qn.com",
+            "fsylbm.34x6wc1u.com",
+            "gbwc.rkvdlyciz.com",
+            "mndrxt.my66vx6f.com",
+            "qlgof.hyazjrvos.com",
+            "qwjxhz.fawxkgdre.com",
+            "rybakz.qug1ubct.xyz",
+            "udxs.rasjvtzyp.com",
+            "wocx.gadmsubqt.com",
+            "wsoycw.satrfq4v.com",
+            "xcjyzh.hsfudelai.com",
+            "ytrsfg.fbq5tlk1.com",
         )
     }
 
@@ -325,7 +328,7 @@ class XuperApiClient(context: Context) {
             }
     }
 
-    /** Logical portalCore path (pre-encryption). Wire path is encrypted by app interceptors. */
+    /** Logical portalCore path. Body is 3DES-wrapped; path string is plaintext in app traffic. */
     fun portalUrl(host: String, logicalPath: String): String {
         val path = if (logicalPath.startsWith("/")) logicalPath else "/$logicalPath"
         return "${baseUrl(host)}$path"
@@ -362,7 +365,8 @@ class XuperApiClient(context: Context) {
                 if (logicalPath.contains("portalCore")) {
                     val c = config
                     addHeader("apkVer", c.apkVersion)
-                    addHeader("spkgVer", c.spkgVersion)
+                    // App sends build stamp (sysVersion), not numeric 43405 — see heap_zap capture.
+                    addHeader("spkgVer", c.spkgVersion.ifBlank { c.sysVersion })
                     addHeader("apk", c.appId)
                 }
             }
@@ -586,7 +590,9 @@ class XuperApiClient(context: Context) {
         config = config.copy(cookieD = "", cookieS = "", cookieT = "")  // clear stale cookies
         for (host in PORTAL_BOOTSTRAP_HOSTS) {
             config = config.copy(portalHost = host)
-            // try getAuthInfo first
+            val slb = getSlbInfo()
+            lines.add("$host slb ${slb.getOrElse { "ERR ${it.message}" }}")
+
             val r = getAuthInfo()
             val msg = r.getOrElse { "ERR ${it.message}" }
             val isJson = msg.contains("returnCode")

@@ -1,25 +1,52 @@
 # HANDOFF — Orchestrating from Win11 (.5) across TV box (.4) and Ubuntu (.40)
 
 For the next agent continuing XuperPlugin. Read [README.md](README.md),
-[ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md) first.
+[ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md),
+[SESSION-2026-07-29.md](SESSION-2026-07-29.md) first.
+
+## TL;DR (session 14 lever close — 2026-07-29 ~17:50)
+
+**Host discovery exhausted** (dalvik/SNI/static DES). Notice hosts = `zxiws`/`nxiqj` without key.
+
+**Unidbg breakthrough (partial):** exported `JNI_OnLoad` @ `0x1203725d` is `b.w #0x12043544`.
+Call real body with **Thumb odd** offset `0x43545`. Forced `JNI_VERSION_1_6` achievable, but
+init still fails on NULL `vtable+0x40` → `kill()` retry — **`N.l`/`N.b2b` not registered**.
+
+**Single next step:** fix singleton/vtable slot `+0x40` so JNI completes naturally, then
+`N.b2b(ijiami.dat)` → DES/portal domain. Harness: `_scratch/Unpack.java` + `run_lever_remote.py`.
+Do **not** use UnpackV50 load path or PC-skip wchan `0x1202e39d`.
+
+---
+
+## TL;DR (session 14 sweep close — 2026-07-29 ~16:54)
+
+**Four parallel tracks finished.** Notice hosts identified without DES (`zxiws`/`nxiqj`).
+Static DES + dalvik portal-host hunt exhausted (MISS / negative). Unidbg v50 later
+superseded by lever fix (see TL;DR above).
+
+---
+
+## TL;DR (session 14 cont — 2026-07-29 16:20)
+
+**spkgVer fix deployed + probed:** still `portal200001` on all JSON hosts — header mismatch
+was real but **not** the gate.
+
+**BBDatabase:** `domain|DES=Sz0JjjU4…` → `/notice/api/get_notice` (notice host), not portalCore.
+**TeleLatino:** SecNeo stub DEX — jadx useless.
+
+---
+
+## TL;DR (session 14 — 2026-07-29)
+
+**Pivot (worked):** live XTV dalvik heap scan — CDN `main_addr` ≠ portal API; bootstrap cleaned;
+`getSlbInfo` in probe. Portal API FQDN remains native-only; version gate unchanged on pool.
+
+---
 
 ## TL;DR (session 13 close — 2026-07-29 15:48)
 
-> **READ [`NEXT-BLOCKER.md`](NEXT-BLOCKER.md) for full status.**
-> Full log: [`SESSION-2026-07-27.md`](SESSION-2026-07-27.md).
-
-**Session 13 (9 unidbg runs, 41-49):** Crash at 0x1203725c = anti-tamper loop (NOP + CBNZ → branch-to-NULL).
-.init_array parsed: 63 ctors, ctor[12]=0x12037289 contains crash. Crash reached via multiple paths
-(init_array dispatch + JNI_OnLoad). Brute-force PC jump (v7) proved bypass possible — reached deep
-into JNI_OnLoad before secondary crash. Decrypted instruction bytes dumped: `00bf 72b9 b0b5 084d`.
-All 9 approaches hit same fundamental issue: no valid return frame (LR always unidbg sentinel 0xffff0000),
-and cascading anti-tamper checks cause secondary failures.
-
-**Next session:** Ghidra disassembly of decrypted code OR multi-level bypass chain OR pivot to .37 static analysis.
-
-**Done (13 sessions):** Full API format recovered. 3DES body crypto 100% proven.
-65+ hosts probed (universal version gate). 4 sister APKs analyzed. Plugin builds+deploys+probes.
-Unidbg: 49 iterations, singleton+GOT working, ctor list mapped, crash site decoded.
+Crash @ `0x1203725c` was treated as anti-tamper. **(Session 14 correction:** that export is a
+**branch stub** to real JNI @ `0x12043544`.) Full API + 3DES proven; 65+ hosts version-gated.
 
 ---
 
@@ -45,7 +72,7 @@ live fields. 3DES+envelope proven. VOD structure mapped.
 |------|-----|------|----------------------|
 | **Win11** | 192.168.100.5 | **Orchestrator** (this machine, runs the agent) | — |
 | TV box | 192.168.100.4 | Target device (rooted, Android 10, ijiami XTV) | **direct adb** |
-| Ubuntu laptop | 192.168.100.40 | Build host (gradle, Android SDK, jadx, mitm) | **paramiko SSH** |
+| Ubuntu laptop | 192.168.100.40 | Build host + **unidbg** (`~/xtv-ghidra/harness`) | **paramiko SSH** |
 
 **Why Win11 orchestrates:** it holds two INDEPENDENT control channels —
 direct `adb` to `.4` and `SSH` to `.40`. If a MITM route change or iptables slip
@@ -240,7 +267,14 @@ Note: appId differs from package name (`com.android.mgstv`).
 | Stub DEX decompilation | 4 classes found | `s.h.e.l.l` package: AppComponentFactory, Application, native loader, callback. Real app class: `com.interactive.brasiliptv.app.AppWrapper`. Loader uses `DETool.loadDEso()` for decryption. |
 | libexec.so strings | No API strings | Native lib only handles decryption — actual API code is in encrypted `ijiami.dat` (4.5MB) decrypted at runtime. |
 
-## Updated next steps
+## Updated next steps (session 14 lever — supersedes A/B/C below for priority)
+
+1. **Unidbg P0:** fix NULL `vtable+0x40` at check `0x120370c6` so `JNI_OnLoad` registers natives
+   without forced VERSION / kill loop. See [`SESSION-2026-07-29.md`](SESSION-2026-07-29.md).
+2. `N.b2b(ijiami.dat)` → DES key + portal domain.
+3. Plugin probe for `returnCode=0`.
+
+## Updated next steps (archive — early session)
 
 **Priority A — MITM capture fresh s/t cookies:**
 1. Follow MITM procedure in [ARCHITECTURE.md](ARCHITECTURE.md) (box-source-only PREROUTING on `.40`).
