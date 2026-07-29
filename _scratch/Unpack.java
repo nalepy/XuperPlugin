@@ -519,6 +519,48 @@ public class Unpack extends AbstractJni {
             public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
             public void detach() {}
         }, 0x1201e378L, 0x1201e378L, null);
+        // 0x1201e378's own body (disasm'd session 15d): GOT_Y chain `ldr r6,[pc]; ldr r0,[r6];
+        // ldr r0,[r0,#0x10]; ldr r5,[r0,#0x40]; blx r5` - same double-indirection shape as our
+        // known GOT slots. Trace it live to find which link in the chain is bad.
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 4) return;
+                long r6 = backend.reg_read(ArmConst.UC_ARM_REG_R6).longValue();
+                System.out.println(">>> [1e378] r6(GOT_Y)=0x" + Long.toHexString(r6));
+                try {
+                    byte[] m = backend.mem_read(r6, 4);
+                    System.out.println(">>> [1e378] *(GOT_Y) = 0x" + Long.toHexString(
+                            (m[0]&0xffL)|((m[1]&0xffL)<<8)|((m[2]&0xffL)<<16)|((m[3]&0xffL)<<24)));
+                } catch (Throwable t) {
+                    System.out.println(">>> [1e378] *(GOT_Y) read failed: " + t);
+                }
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x1201e398L, 0x1201e398L, null);
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 4) return;
+                long r0 = backend.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                System.out.println(">>> [1e378] before ldr r5,[r0,#0x40]: r0=0x" + Long.toHexString(r0));
+                try {
+                    byte[] m = backend.mem_read(r0 + 0x40, 4);
+                    System.out.println(">>> [1e378] *(r0+0x40) = 0x" + Long.toHexString(
+                            (m[0]&0xffL)|((m[1]&0xffL)<<8)|((m[2]&0xffL)<<16)|((m[3]&0xffL)<<24)));
+                } catch (Throwable t) {
+                    System.out.println(">>> [1e378] *(r0+0x40) read failed: " + t);
+                }
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x1201e39aL, 0x1201e39aL, null);
+        addTrace(backend, jniPhase, 0x1201e3aeL, "before blx r5 (r5=target)", ArmConst.UC_ARM_REG_R5);
+        // Confirm reachability of VTABLE_STUB itself on this second call (does the blx r5
+        // actually land here, or does it fault before even reaching the target?).
+        addTrace(backend, jniPhase, 0x7f000800L, "VTABLE_STUB entry reached", -1);
+        addTrace(backend, jniPhase, 0x1201e3b0L, "after blx r5 returned, r0", ArmConst.UC_ARM_REG_R0);
 
         // Wide execution trace: log every DISTINCT address actually executed across the whole
         // span from our vtable fix to the kill() block, in visit order. This reconstructs the
@@ -730,6 +772,58 @@ public class Unpack extends AbstractJni {
             } catch (Throwable t) {
                 System.out.println(">>> FLAG_X pre-write FAILED: " + t);
             }
+            // Session 15d: FLAG_X got us into 0x1201e378, which crashed on an unmapped read.
+            // Traced it live: `ldr r6,[pc]->0x120868e0(=sa); ldr r0,[r6]->0x120868f0(=P2, our
+            // own singleton!); ldr r0,[r0,#0x10]` - P2+0x10 (0x12086900) was never populated by
+            // us, held garbage (0x412f6d70), then `ldr r5,[r0,#0x40]` read 0x412f6d70+0x40 =
+            // 0x412f6db0 -> unmapped, crash. Fix: point P2+0x10 at P2 itself - P2+0x40 is
+            // already our real, valid VTABLE_STUB, so this reuses working infrastructure
+            // instead of building a whole new fake object.
+            final long P2_SLOT_10 = P2 + 0x10; // 0x12086900
+            try {
+                backend.mem_write(P2_SLOT_10, new byte[]{
+                        (byte) (P2 & 0xff), (byte) ((P2 >> 8) & 0xff),
+                        (byte) ((P2 >> 16) & 0xff), (byte) ((P2 >> 24) & 0xff)
+                });
+                System.out.println(">>> P2_SLOT_10 @0x" + Long.toHexString(P2_SLOT_10)
+                        + " -> self-ptr P2 (0x" + Long.toHexString(P2) + ")");
+            } catch (Throwable t) {
+                System.out.println(">>> P2_SLOT_10 pre-write FAILED: " + t);
+            }
+            // Session 15d cont: full disasm of 0x1201e378 shows it's a repeated pattern -
+            // `ldr r0,[r6]->P2; ldr r0,[r0,#0x10]->P2 (our self-ref); ldr rX,[r0,#OFFSET]; blx
+            // rX` - i.e. P2 is being used as a fake "env"/interface object at MANY offsets, not
+            // just +0x40. Offsets +0x60 and +0x5c (the latter called 5x, a DeleteLocalRef-style
+            // cleanup pattern) are hit right after the one we already fixed. Populate them too
+            // with the same real, valid stub - each call just needs to return non-zero so the
+            // `cbz/cmp+beq -> fail` checks after each one pass.
+            for (long off : new long[]{0x60L, 0x5cL, 0x18L, 0x68L, 0x35cL}) {
+                long slot = P2 + off;
+                try {
+                    backend.mem_write(slot, new byte[]{
+                            (byte) (VTABLE_STUB | 1L), (byte) ((VTABLE_STUB >> 8) & 0xff),
+                            (byte) ((VTABLE_STUB >> 16) & 0xff), (byte) ((VTABLE_STUB >> 24) & 0xff)
+                    });
+                    System.out.println(">>> P2+0x" + Long.toHexString(off) + " @0x" + Long.toHexString(slot)
+                            + " -> VTABLE_STUB");
+                } catch (Throwable t) {
+                    System.out.println(">>> P2+0x" + Long.toHexString(off) + " pre-write FAILED: " + t);
+                }
+            }
+            // Safety net: re-assert EXEC on SCRATCH right before the call. Session 15d saw a
+            // `blx r5` to the SAME VTABLE_STUB address that a prior `blx r1` (0x120370c6, same
+            // run) executed successfully, fail with FETCH_PROT the second time - re-mapping to
+            // rule out a permission/TB-cache quirk before digging further.
+            try {
+                backend.mem_protect(SCRATCH, 0x1000,
+                        UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                byte[] recheck = backend.mem_read(VTABLE_STUB, 4);
+                StringBuilder sbh = new StringBuilder();
+                for (byte x : recheck) sbh.append(String.format("%02x", x & 0xff));
+                System.out.println(">>> SCRATCH re-protected EXEC; VTABLE_STUB bytes still: " + sbh);
+            } catch (Throwable t) {
+                System.out.println(">>> SCRATCH re-protect FAILED: " + t);
+            }
             // Bypass export stub: call real Thumb JNI_OnLoad directly.
             jniPhase[0] = true;
             // Offset must be odd for Thumb — even 0x43544 runs as ARM and raises bogus SWI.
@@ -745,7 +839,8 @@ public class Unpack extends AbstractJni {
             }
             // Post-call decrypted-code dumps for offline capstone disasm (ctors have run by now).
             for (long[] range : new long[][]{{0x12037090L, 0x60}, {0x12037b40L, 0xa0}, {0x12037a80L, 0x60},
-                    {0x12037860L, 0x60}, {0x120379d0L, 0xb0}, {0x120370e0L, 0x80}}) {
+                    {0x12037860L, 0x60}, {0x120379d0L, 0xb0}, {0x120370e0L, 0x80},
+                    {0x1201e378L, 0x180}, {0x12037c18L, 0x40}}) {
                 try {
                     long ea = range[0];
                     int len = (int) range[1];

@@ -1,14 +1,19 @@
 # Next Blocker — XuperPlugin portalCore
 
-## Status (2026-07-29 session 15c — the unconditional kill() blocker is BYPASSED; new, deeper crash found)
+## Status (2026-07-29 session 15d — `0x1201e378` fully cleared; new object needed for `0x12037c18`)
 
-**The "unconditional kill(pid,SIGKILL)" blocker (session 15a/b) is bypassed.** Found the real
-gate via a wide execution-walk trace: a single flag byte at `0x12092944` was 0, forcing an
-early-exit branch straight into the anti-tamper/kill() region. Setting it to 1 redirects
-execution into the REAL init path (`bl 0x1201e378`) — confirmed via the walk trace, no more
-kill() hits at all. **New crash, further in than any prior session has reached:** `0x1201e378`
-does an unmapped read at `0x412f6db0` — a different, genuine bug (uninitialized real state,
-likely from something our earlier ctor-skip hacks left un-set), not related to vtable/kill().
+**`0x1201e378` (the function reached after bypassing kill()) now completes successfully and
+returns to its caller.** It turned out to reuse our `P2` object as a fake "env"/interface at
+FIVE MORE offsets beyond `+0x40` (`+0x60`, `+0x5c` ×5, `+0x18`, `+0x68`, `+0x35c`) — populated
+all of them with the same real, valid stub; confirmed via trace hooks the whole function walks
+through cleanly and returns (`[walk] 0x120378a4` = the instruction right after its `bl` returns).
+
+**New blocker:** the very next call, `bl 0x12037c18`, crashes with `FETCH_PROT` almost
+immediately. Its disasm (already captured, partial — only 0x40 bytes so far) shows it uses a
+**different GOT slot entirely** (via register `sb`/r9, not our known `r6`/`0x12082340` chain),
+reading `*(obj+0x24)` then `*(that+0x38)` for a function pointer, plus `*(obj+0x44)` for the
+call's `this` arg — i.e. a **second, separate fake object** needs to exist, not just more
+offsets on `P2`. Not yet resolved/fixed.
 
 Full log: [`SESSION-2026-07-29.md`](SESSION-2026-07-29.md). Handoff: [`HANDOFF.md`](HANDOFF.md).
 
@@ -141,43 +146,73 @@ address visited across `0x120370e0`-`0x12037b90`, one run) found the *actual* fo
 hits in this run** — the entire anti-tamper/kill()-loop blocker from sessions 14/15a/15b is
 gone. This is the furthest any session has gotten into this binary.
 
-### New blocker (session 15c) — unmapped read inside `0x1201e378`, a genuinely new/different bug
+### `0x1201e378` traced fully and CLEARED (session 15d)
+Its unmapped read (`address=0x412f6db0`) was `*(garbage_from_P2+0x10)+0x40` — traced live and
+confirmed the *actual* chain: `ldr r6,[pc]->0x120868e0(=sa)`; `ldr r0,[r6]->P2(0x120868f0)`;
+`ldr r0,[r0,#0x10]` (P2+0x10, which we'd never touched — held garbage `0x412f6d70`); `ldr
+r5,[r0,#0x40]` → `0x412f6d70+0x40=0x412f6db0` → unmapped. **Fix:** point `P2+0x10` at `P2`
+itself (self-reference) — `P2+0x40` is already our real, valid `VTABLE_STUB`, so this reuses
+working infrastructure. Verified: the chain resolves to our stub, `blx` succeeds, returns `1`.
+
+Full disasm of `0x1201e378` (0x180 bytes dumped, all resolved) showed it's a **repeated pattern**
+— `P2` used as a fake "env"/interface object at FIVE more offsets: `+0x60`, `+0x5c` (called 5×,
+a `DeleteLocalRef`-style cleanup pattern), `+0x18`, `+0x68`, `+0x35c`. Populated **all** of them
+with the same real stub. **Verified via the wide walk trace: `0x1201e378` now completes and
+returns to its caller** (`[walk] 0x120378a4` — the instruction right after its `bl` returns).
+This is the deepest any session has gotten.
+
+### New blocker (session 15d) — `bl 0x12037c18` needs a SECOND, separate fake object
+The very next call in the same caller (`0x120378a4: mov r0,r4; bl 0x12037c18`) crashes almost
+immediately with `FETCH_PROT`. Partial disasm (only first 0x40 bytes dumped so far) shows it
+does **not** reuse our `r6`/`0x12082340`/`P2` chain — it resolves a **different** GOT slot into
+register `sb`(r9), then:
 ```
-WARN ... Read memory failed: address=0x412f6db0, size=4, PC=RX@0x1201e378[libexec.so]0x1e378,
-     LR=RX@0x120378a5[libexec.so]0x378a5
+0x12037c3a: ldr.w r0,[sb]           ; r0 = *(new_obj)
+0x12037c3e: ldr r1,[r0,#0x24]       ; r1 = *(new_obj+0x24)
+0x12037c40: ldr r0,[r0,#0x44]       ; r0 = *(new_obj+0x44)   <- becomes the call's "this" arg
+0x12037c42: ldr r4,[r1,#0x38]       ; r4 = *(r1+0x38)         <- the actual function pointer
+0x12037c4c: blx r4
 ```
-Entry: `r0` (arg to `0x1201e378`) = `0xfffe12a0`, first 32 bytes:
-`f00efeff000000000000000000000000e60100ef1eff2fe10000000000000000` — same `0xfffe....`-region
-pattern seen before for JavaVM*/stack-adjacent structures (not a heap object we control).
-`0x412f6db0` itself looks like uninitialized/garbage data, **not** a value derived from `r0`'s
-first 32 bytes — the bad read is likely at some **further offset** into `r0`'s structure, or
-from a **different register** entirely (not yet isolated). This is a *different class* of bug
-than the vtable/kill() issues — likely uninitialized real state that our earlier CTOR-SKIP/
-CTOR-PATCH hacks (from session 12-13) left unset, now that we're finally executing code that
-actually depends on it.
+So this needs: (a) the GOT slot feeding `sb` to point at a real object, (b) that object's
+`+0x24` to point at ANOTHER object with a valid `+0x38` function pointer, (c) that SAME first
+object's `+0x44` to be a valid arg (probably fine to be the same self-referencing trick as `P2`,
+but needs its own slot). Not yet resolved — the GOT literal for this hasn't been computed
+(instruction is `ldr r0,[pc,#0x3a8]` at `0x12037c24`, whose literal falls outside the 0x40 bytes
+dumped so far; need a wider dump, same technique as always).
 
 ### Next steps (ordered) — session 16
-1. **Isolate the bad pointer inside `0x1201e378`.** Dump more than 32 bytes of `r0`'s struct at
-   entry (or all registers) right when the crash fires — need a hook a few instructions into
-   `0x1201e378` (its body hasn't been disassembled yet at all) to see exactly which
-   register/offset produces `0x412f6db0`. Use the same "dump post-decryption runtime bytes →
-   SSH capstone" technique that worked for every fix this session.
-2. Once `0x1201e378` and `0x12037c18` (the next call after it) complete cleanly, the walk trace
-   should reach the real `RegisterNatives` calls at `0x120379d0`-`0x12037a80` (offset `0x35c` =
-   JNINativeInterface index 215) — confirm `N.l`/`N.b2b` resolve after that.
-3. Only then: `N.b2b(ijiami.dat)` → DES key + portal domain → plugin probe.
+1. **Resolve the new GOT slot** feeding `sb` at `0x12037c32-36` (dump ≥0x400 bytes from
+   `0x12037c18` to reach the literal pool, or just extend the existing dump range in
+   `_scratch/Unpack.java`'s dump loop and resolve the literal exactly like `FLAG_X`/`GOT_X`
+   were resolved this session).
+2. Check whether that slot is uninitialized (garbage, same story as everything else this
+   session) or points somewhere valid already. If uninitialized: decide whether to point it at
+   `P2` (reusing existing infra, if the `+0x24`→`+0x38` chain can tolerate it) or build a small
+   second fake object at a fresh `mem_map`'d address with its own `+0x38` stub — mirror
+   whichever is simpler once the exact expected shape is confirmed via live trace hooks
+   (register dumps at `0x12037c3a`/`0x12037c3e`/`0x12037c40`/`0x12037c42`, same pattern used for
+   every fix this session).
+3. Once `0x12037c18` completes, the walk trace should reach the real `RegisterNatives` calls at
+   `0x120379d0`-`0x12037a80` (offset `0x35c` = JNINativeInterface index 215) — confirm `N.l`/
+   `N.b2b` resolve after that.
+4. Only then: `N.b2b(ijiami.dat)` → DES key + portal domain → plugin probe.
 
-### Do NOT (session 15c addition)
+### Do NOT (session 15c/d additions)
 - Don't reintroduce the kill()-hook's forced-completion path as the primary strategy — FLAG_X
   bypasses the entire anti-tamper region for real now; the kill()-hook is dead code on this path
   (harmless to leave in as a safety net, but don't rely on it going forward).
+- Don't assume every "fake env" offset needs its own distinct object — `P2` self-referencing
+  worked for `+0x10`/`+0x40`/`+0x60`/`+0x5c`/`+0x18`/`+0x68`/`+0x35c` because the calling code
+  only checks "is the return value non-zero", not real semantics. Try the cheap self-ref trick
+  before building anything more elaborate.
 
-### Reproduce (updated for session 15's harness)
+### Reproduce (updated for session 15d's harness)
 Same as before — `_scratch/Unpack.java` + `_scratch/run_lever_remote.py`, unchanged interface.
-The new diagnostics (`[trace]`/`[walk]`/`[ENTRY]` lines, `VTABLE_SLOT_40`/`P2_SLOT_188`/
-`P2_SLOT_109`/`FLAG_X` prints) are gated so they don't affect behavior, just visibility. Current
-run now crashes (unmapped read) rather than looping — that's expected/correct given where we
-are; it means we're past the old blocker into new, previously-unreached territory.
+All diagnostics (`[trace]`/`[walk]`/`[ENTRY]`/`[1e378]` lines, every `P2+0x..`/`FLAG_X`/
+`P2_SLOT_..` print) are gated so they don't affect behavior, just visibility. Current run
+crashes inside `0x12037c18` (a *new*, further-in* FETCH_PROT) — that's the expected/correct
+frontier; it means everything before it (vtable+0x40, the kill() region, all of `0x1201e378`)
+is now genuinely working, not just forced.
 
 ---
 

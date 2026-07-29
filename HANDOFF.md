@@ -4,27 +4,26 @@ For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md),
 [SESSION-2026-07-29.md](SESSION-2026-07-29.md) first.
 
-## TL;DR (session 15c — 2026-07-29 ~19:15) — READ THIS ONE FIRST
+## TL;DR (session 15d — 2026-07-29 ~19:35) — READ THIS ONE FIRST
 
-**Both the old P0 (`vtable+0x40` NULL) AND the unconditional `kill(pid,SIGKILL)` anti-tamper
-blocker are now bypassed.** This is the furthest any session has reached into this binary.
+**The old P0 (`vtable+0x40`), the unconditional `kill(pid,SIGKILL)` blocker, AND the full
+`0x1201e378` function are all now genuinely fixed/cleared** — not hacked, actually executing
+real code and returning normally. This is by far the furthest any session has reached.
 
-1. `vtable+0x40` — genuinely fixed via live capstone disasm (post-decryption runtime bytes, not
-   stale static guesses). Real object `P2 = *(*(0x12082340))`; fixed `P2+0x40` (vtable stub),
-   `P2+0x188`, `P2+0x109` — all previously-uninitialized, all verified via read-back logging.
-2. **The `kill(pid,SIGKILL)` blocker — found the real gate and bypassed it.** A single flag byte
-   at `0x12092944` (resolved via a PC-relative literal at `0x12037892`, same technique as #1)
-   gates a branch at `0x1203789a`: zero takes an early-exit straight into the anti-tamper/kill()
-   region; non-zero falls into the real init path. Was 0. Set to 1. **A wide execution-walk
-   trace confirmed zero kill() hits afterward** — execution now runs code (`0x1201e378`,
-   `0x12037c18`) that no prior session ever reached.
+1. `vtable+0x40` — real object `P2 = *(*(0x12082340))` (`=0x120868f0`). Fixed `P2+0x40`,
+   `P2+0x188`, `P2+0x109`.
+2. `kill(pid,SIGKILL)` anti-tamper region — bypassed via `FLAG_X` at `0x12092944` (was 0, a
+   branch gate at `0x1203789a` that took the anti-tamper exit; set to 1, confirmed via wide
+   execution-walk trace: zero kill() hits, real init path taken instead).
+3. `0x1201e378` — turned out to reuse `P2` as a fake "env" object at FIVE more offsets
+   (`+0x10` self-ref, `+0x60`, `+0x5c` ×5 cleanup calls, `+0x18`, `+0x68`, `+0x35c`), all
+   populated with the same real, valid stub. **Confirmed complete + returns to caller.**
 
-**New blocker, different in kind:** `0x1201e378` (not yet disassembled) does an unmapped memory
-read (`address=0x412f6db0`) — this looks like genuinely uninitialized real state (possibly a
-side effect of earlier sessions' CTOR-SKIP/CTOR-PATCH hacks), not another anti-tamper gate. See
-[`NEXT-BLOCKER.md`](NEXT-BLOCKER.md) session 15c section for the exact register dump and
-next-step plan (need to disassemble `0x1201e378`'s body to find which offset produces the bad
-pointer).
+**New blocker:** the next call, `bl 0x12037c18`, needs a **second, separate fake object** — it
+resolves a different GOT slot (register `sb`/r9) and reads `*(obj+0x24)` then `*(that+0x38)`
+for its function pointer, plus `*(obj+0x44)` for the call arg. Not yet built/fixed — the
+literal pool address for that GOT slot falls outside what's been dumped so far. See
+[`NEXT-BLOCKER.md`](NEXT-BLOCKER.md) session 15d section for the exact disasm and next-step plan.
 
 Harness (`_scratch/Unpack.java`) no longer needs the forced-`JNI_VERSION_1_6`/kill()-loop hack
 to get this far — that code path is effectively dead now (harmless to leave as a safety net).
@@ -36,6 +35,10 @@ prior sessions' static/pre-decryption guessing. (2) When stuck on "why does exec
 instead of Y", don't bisect address-by-address — add ONE wide-range `CodeHook` logging every
 distinct address visited (`LinkedHashSet`, capped print count) across the whole suspect region
 in a single run; it reconstructs the real path immediately instead of many slow round trips.
+(3) When a fake-env-shaped `blx` call is only checked for "non-zero return", a cheap
+self-referencing pointer (point the object's own slot back at itself, reusing an already-real
+function pointer elsewhere on it) is usually enough — don't build a whole new fake object until
+you've confirmed the cheap trick doesn't satisfy the check.
 
 ## TL;DR (session 14 lever close — 2026-07-29 ~17:50)
 
