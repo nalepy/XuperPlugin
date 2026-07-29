@@ -34,7 +34,7 @@ data class XuperConfig(
     val cookieS: String = "QDtRcPPKDAwtROdnoGlxRgXpj64ElYpBBNH0TIZO20TIcc",
     val cookieT: String = "kzDQKAgQI3UlOy-bl3ScQrOcu3NIHFGAY5PZ6xuoZ3z",
     val userId: String = "169355704",
-    val userToken: String = "dbf6956a-cf03-4750-8c9b-28cc937e0148",
+    val userToken: String = "1d66b674-7642-4c59-ab18-6215fbe57d94",
     // --- getLiveData fields (captured from live app session) ---
     val columnId: Int = 76182,
     val dataVersion: String = "pre3194bfb81-899a-11f1-b41c-e7ba14321033LiveDataV6",
