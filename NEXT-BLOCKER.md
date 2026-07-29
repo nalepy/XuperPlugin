@@ -95,16 +95,37 @@ understood root cause).
 - Don't confuse `obj(r0)` at the `0x120370c6` `blx` hook with the vtable object — it's `r5`
   (JavaVM*), overwritten right before the call. The real object is `P2` (`=*(*(0x12082340))`).
 
+### Important lead — probable real `RegisterNatives` call site (NOT yet confirmed reached)
+Disassembly of `0x120379d0`-`0x12037a80` (dumped this session, not yet in prior sessions) shows
+a pattern of indirect calls through a JNIEnv-shaped vtable (`ldr r0,[r4]; ldr r2,[r0,#OFFSET];
+blx r2`) at offsets `0x18`, `0x68`, and — critically — **`0x35c`** twice
+(`0x12037a10`/`0x12037a6a`: `ldr.w r6,[r0,#0x35c]; ... blx r6`). Offset `0x35c` (`860/4=215`) is
+the well-known `JNINativeInterface` table index for **`RegisterNatives`** on 32-bit Android —
+each call is immediately followed by `cmp r0,#0; bmi → failure path` (JNI's real "negative on
+error" convention), which is exactly RegisterNatives' real signature/semantics.
+
+**However:** added entry-hooks at `0x12037a80`, `0x120370fa`, `0x120370fe`, `0x120371a6`, and at
+the two suspected `blx r6` call sites themselves (`0x12037a16`, `0x12037a72`) — **none fired**
+in a full run, even though hooks *inside* the same `0x12037a80` block (`0x12037aa4`, `0x12037ac0`,
+`0x12037b4a`) fire every time. This means the current execution path reaches `~0x12037a92`
+(mid-block) via some indirect jump that **skips both `0x12037a80`'s own entry instruction and
+all of `0x120379d0`-`0x12037a80`'s RegisterNatives-shaped code** — i.e., **the RegisterNatives
+calls found this session are very likely NOT on our current path at all**, or are reached only
+via a different caller/branch we haven't identified yet. Do not assume they're the fix without
+re-verifying reachability first.
+
 ### Next steps (ordered) — session 16
-1. **Find what CALLS into `0x12037a80`/`0x12037a92`** (the block establishing `r8` from the GOT
-   chain) and what condition, in a genuinely fully-initialized object, makes that caller skip
-   this whole anti-tamper region entirely. Static/live disasm of the code just *before*
-   `0x12037a80` (not yet dumped this session) is the natural next step — same technique used
-   this session (dump post-decryption runtime bytes → SSH capstone) works fine, just aim it
-   further back.
-2. Once that gate is found and satisfied, confirm `RegisterNatives` actually fires (watch for
-   unidbg's DVM machinery reporting registered natives, or simply retry `N.l`/`N.b2b` calls).
-3. Only then: `N.b2b(ijiami.dat)` → DES key + portal domain → plugin probe.
+1. **Find what CALLS into `0x12037a80`/`0x12037a92`** (LR at that point, captured live, is the
+   fastest way — an entry hook at `0x12037a80` was added this session but never fired, so the
+   entry must be a jump straight into the block's *middle*; try hooking a few addresses between
+   `0x12037a80` and `0x12037a92` to bisect exactly where control lands).
+2. Separately, verify whether the `0x120379d0`/RegisterNatives-shaped code is reachable from
+   *anywhere* in this run (e.g. hook `0x120379d0` itself, and the `blx #0x1207b310` at
+   `0x120370e0` that's supposed to lead there) — if it's truly dead on this path, find what
+   **does** call real `RegisterNatives` (search for other `+0x35c` vtable-offset patterns, or
+   for `bmi`/negative-return JNI-convention checks elsewhere in the decrypted function).
+3. Once the real `RegisterNatives` call is confirmed reachable and executing, verify `N.l`/
+   `N.b2b` resolve. Only then: `N.b2b(ijiami.dat)` → DES key + portal domain → plugin probe.
 
 ### Reproduce (updated for session 15's harness)
 Same as before — `_scratch/Unpack.java` + `_scratch/run_lever_remote.py`, unchanged interface.

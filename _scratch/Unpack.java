@@ -443,6 +443,58 @@ public class Unpack extends AbstractJni {
         addTrace(backend, jniPhase, 0x12037ac4L, "pid<=threshold path NOT taken to flag-block (fallthrough)", -1);
         addTrace(backend, jniPhase, 0x12037b4aL, "ENTERED flag-check block (0x12037b4a)", -1);
 
+        // 0x12037a10/0x12037a6a: `ldr.w r6,[r0,#0x35c]` then `blx r6` - offset 0x35c (860/4=215)
+        // matches the well-known JNINativeInterface index for RegisterNatives on 32-bit Android.
+        // If real, these are the ACTUAL RegisterNatives(env, clazz, methods, nMethods) calls -
+        // BEFORE the kill()-anti-tamper region, not after. Trace args + real return value
+        // (don't override anything - let unidbg's own JNIEnv handle it for real).
+        for (final long callAddr : new long[]{0x12037a16L, 0x12037a72L}) {
+            backend.hook_add_new(new CodeHook() {
+                int n;
+                public void hook(Backend b, long address, int size, Object user) {
+                    if (!jniPhase[0] || n++ >= 6) return;
+                    long r0 = backend.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                    long r1 = backend.reg_read(ArmConst.UC_ARM_REG_R1).longValue();
+                    long r2 = backend.reg_read(ArmConst.UC_ARM_REG_R2).longValue();
+                    long r3 = backend.reg_read(ArmConst.UC_ARM_REG_R3).longValue();
+                    long r6 = backend.reg_read(ArmConst.UC_ARM_REG_R6).longValue();
+                    System.out.println(">>> [RegisterNatives?] blx @0x" + Long.toHexString(address)
+                            + " target(r6)=0x" + Long.toHexString(r6)
+                            + " env(r0)=0x" + Long.toHexString(r0)
+                            + " clazz(r1)=0x" + Long.toHexString(r1)
+                            + " methods(r2)=0x" + Long.toHexString(r2)
+                            + " nMethods(r3)=0x" + Long.toHexString(r3));
+                }
+                public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                public void detach() {}
+            }, callAddr, callAddr, null);
+        }
+        addTrace(backend, jniPhase, 0x12037a18L, "RegisterNatives#1 returned (r0)", ArmConst.UC_ARM_REG_R0);
+        addTrace(backend, jniPhase, 0x12037a74L, "RegisterNatives#2 returned (r0)", ArmConst.UC_ARM_REG_R0);
+
+        // ENTRY of 0x12037a80 itself - the RegisterNatives?-block hooks never fired, meaning
+        // our current path reaches 0x12037a80/a92 WITHOUT falling through from 0x120379d0's
+        // RegisterNatives calls. Capture LR here to find the *actual* caller/entry condition.
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 6) return;
+                long lr = backend.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                long r0 = backend.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                long r4 = backend.reg_read(ArmConst.UC_ARM_REG_R4).longValue();
+                System.out.println(">>> [ENTRY] 0x12037a80 lr=0x" + Long.toHexString(lr)
+                        + " r0=0x" + Long.toHexString(r0) + " r4=0x" + Long.toHexString(r4));
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x12037a80L, 0x12037a80L, null);
+        // Also trace the earlier fork point right after our vtable fix: does the "blx #0x1207b310"
+        // continuation (0x120370e0) and the big obfuscated function at 0x120370f0 take the
+        // success or failure branch at its own first gate (0x120370fa call + 0x12037100 beq)?
+        addTrace(backend, jniPhase, 0x120370faL, "ENTRY big-fn 0x120370f0 (r0=arg)", ArmConst.UC_ARM_REG_R0);
+        addTrace(backend, jniPhase, 0x120370feL, "big-fn gate1 result (r0) before beq 0x120371a6", ArmConst.UC_ARM_REG_R0);
+        addTrace(backend, jniPhase, 0x120371a6L, "big-fn gate1 TAKEN (early-exit branch)", -1);
+
         System.out.println(">>> loading libexec.so ...");
         File so = new File("/tmp/apkx/assets/ijm_lib/armeabi/libexec.so");
         DalvikModule dm = null;
@@ -626,7 +678,7 @@ public class Unpack extends AbstractJni {
             }
             // Post-call decrypted-code dumps for offline capstone disasm (ctors have run by now).
             for (long[] range : new long[][]{{0x12037090L, 0x60}, {0x12037b40L, 0xa0}, {0x12037a80L, 0x60},
-                    {0x12037860L, 0x60}}) {
+                    {0x12037860L, 0x60}, {0x120379d0L, 0xb0}, {0x120370e0L, 0x80}}) {
                 try {
                     long ea = range[0];
                     int len = (int) range[1];
