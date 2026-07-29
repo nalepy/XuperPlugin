@@ -98,7 +98,26 @@ class XuperApiClient(context: Context) {
   companion object {
         /** CF-fronted portalCore hosts (session 6c); use DOH on Win11 if DNS fails. */
         val PORTAL_BOOTSTRAP_HOSTS = listOf(
-            // Cold-start tcpdump 2026-07-27 — TLS SNI candidates
+            // TeleLatino DES-resolved hosts (from memory dump on .4)
+            "joqotx.p27i1en9.com",
+            "wetc.pvqox2zhlc.com",
+            // Brasil TV hosts (from memory dump on .4)
+            "bxvxjj.pzmsjhwvd.online",
+            "cqrkgyod.ne6dxwkmjb.com",
+            "esyte.jydfb8gtg.com",
+            "fafemfd.45ef74qn.com",
+            "fsylbm.34x6wc1u.com",
+            "gbwc.rkvdlyciz.com",
+            "mndrxt.my66vx6f.com",
+            "qlgof.hyazjrvos.com",
+            "qwjxhz.fawxkgdre.com",
+            "rybakz.qug1ubct.xyz",
+            "udxs.rasjvtzyp.com",
+            "wocx.gadmsubqt.com",
+            "wsoycw.satrfq4v.com",
+            "xcjyzh.hsfudelai.com",
+            "ytrsfg.fbq5tlk1.com",
+            // Cold-start tcpdump — TLS SNI candidates
             "34fhwevf.cbcf4gg3f.com",
             "eskna.ucpjdhivl.com",
             "yvhcn.hxjebagrv.com",
@@ -119,7 +138,7 @@ class XuperApiClient(context: Context) {
             "mptec.dhkrxuzcy.com",
             "xsvs.evlslb.com",
             "xsvs.vfltbr.com",
-            // Session 10 heap dump — 27 new obfuscated domains resident in app memory
+            // Session 10 heap dump — 27 resident domains
             "banamyi.vb1kivdlvc.com",
             "bmagon.sxcrwendu.com",
             "cdsr.higoesutn.com",
