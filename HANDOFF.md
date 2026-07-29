@@ -4,7 +4,31 @@ For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md),
 [SESSION-2026-07-29.md](SESSION-2026-07-29.md) first.
 
-## TL;DR (session 15d — 2026-07-29 ~19:35) — READ THIS ONE FIRST
+## TL;DR (session 15e — 2026-07-29 ~19:55) — READ THIS FIRST
+
+**BTV binaries extracted from .37. unidbg confirmed past 0x1203725c — new crash at 0x12043545.**
+
+1. **.37 extraction (no root needed):** APKs are world-readable at `/data/app/*.apk`. `unzip -p`
+   pulled `assets/ijm_lib/armeabi/libexec.so` (435KB) + `assets/ijiami.dat` (4.2MB) from
+   BrasilTV APK. Root attempts (DirtyCow, TowelRoot) all blocked on this kernel (3.10.33, SELinux
+   enforcing). SSH via plink + DSA host key, password empty, u0_a70 only.
+
+2. **BTV libexec.so = XTV libexec.so:** All hook addresses identical (0x37289 ctor, 0x3725c crash
+   site, 0x2e5d4 sanity, 0x3a1d8 ctor-patch, etc.). Swapped file paths in Unpack.java, recompiled.
+
+3. **unidbg run (session15e):** 0x1203725c blocker **fully bypassed** — execution walked through
+   0x1203724c-0x12037250 cleanly, jumped to 0x12037878 region, reached `[ENTRY] 0x1201e378` which
+   completed and returned. **New crash:** `UC_ERR_FETCH_PROT` at PC=0x0, LR=0x12037c4f, inside
+   JNI function at 0x12043545 — null function pointer call from second-level object deref.
+   This matches the session15d "second object needed for bl 0x12037c18" blocker exactly.
+
+**Next:** build second fake object for 0x12037c18 call (different GOT slot via sb/r9, needs
+`*(obj+0x24)→*(that+0x38)` chain + `*(obj+0x44)` arg). See NEXT-BLOCKER.md session15d section.
+
+**Git note:** Two agents shared git index — `_assets/brtv_*` landed in 8361a82 instead of
+3ebe428. No data loss, just wrong commit message. Verified consistent in be5a5eb.
+
+## TL;DR (session 15d — 2026-07-29 ~19:35)
 
 **The old P0 (`vtable+0x40`), the unconditional `kill(pid,SIGKILL)` blocker, AND the full
 `0x1201e378` function are all now genuinely fixed/cleared** — not hacked, actually executing

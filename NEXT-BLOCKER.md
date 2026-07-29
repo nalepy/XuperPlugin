@@ -1,5 +1,58 @@
 # Next Blocker — XuperPlugin portalCore
 
+## Status (2026-07-29 session 15e — BTV extraction + unidbg confirms 0x1203725c bypassed)
+
+**BrasilTV libexec.so + ijiami.dat extracted from .37** without root — APKs are world-readable.
+BTV libexec.so is byte-identical to XTV at all hook addresses (ctors, crash site, sanity, GOT).
+Unidbg with BTV binary confirms: 0x1203725c blocker **fully bypassed**, execution reaches
+0x1201e378 (completes) then crashes at 0x12043545 (null function pointer, LR=0x12037c4f).
+
+**Current blocker unchanged from session15d:** `bl 0x12037c18` needs a second fake object with
+different GOT slot chain (`sb`/r9 → `*(obj+0x24)` → `*(that+0x38)`) + `*(obj+0x44)` call arg.
+
+Full log: [`SESSION-2026-07-29.md`](SESSION-2026-07-29.md). Handoff: [`HANDOFF.md`](HANDOFF.md).
+
+---
+
+## Session 15e — .37 extraction + BTV unidbg confirmation (2026-07-29 ~19:18–19:55)
+
+### .37 APK extraction
+- SSH via plink + DSA host key (`ssh-dss 1024 SHA256:TC5s4tWq...`), password empty
+- Shell as u0_a70 (Servers Ultimate), no root — DirtyCow, TowelRoot all blocked
+- APKs world-readable: `/data/app/com.android.mgstv-1.apk` (35MB), `/data/app/com.interactive.brasiliptv-2.apk` (34MB)
+- libexec.so at `assets/ijm_lib/armeabi/libexec.so` inside APK (NOT `lib/armeabi/`)
+- Extracted via `unzip -p` → `/htv/` (vfat, fmask=0000, writable+exec)
+- Transferred to Win11 via plink `cat` pipe → `_assets/brtv_libexec.so` (435,634 bytes)
+- Also extracted `_assets/brtv_ijiami.dat` (4,247,902 bytes)
+- Both uploaded to .40 at `/tmp/apkx/assets/ijm_lib/armeabi/libexec_brtv.so` + `/tmp/apkx/assets/ijiami_brtv.dat`
+
+### Root attempts on .37 (all failed)
+- **DirtyCow (CVE-2016-5195):** Compiled ARM binary (static, 703KB), ran 200M iterations.
+  `/proc/self/mem` writable but writes return I/O error — kernel 3.10.33 has backported fix.
+- **TowelRoot (CVE-2014-3153):** APK downloaded to /htv, `pm install` killed (no
+  `INSTALL_PACKAGES` permission). libexploit.so extracted, loader compiled, but SELinux
+  blocks execstack. Metasploit futex source compilation blocked by missing Android NDK headers.
+- **CVE-2015-3636 (PingPong):** Too complex for ad-hoc implementation (physmap spray, 200+ lines).
+
+### BTV vs XTV binary comparison
+- INIT_ARRAY same (0x82144, 252 bytes, 63 ctors)
+- All hook addresses byte-identical: 0x37289, 0x3725c, 0x2e5d4, 0x3a1d8, 0x3a21e, 0x3a280, 0x370c8
+- Swapped `/tmp/apkx/assets/ijm_lib/armeabi/libexec_brtv.so` into Unpack.java, recompiled clean
+
+### Unidbg run (session15e)
+- 0x1203725c: **fully bypassed** — no crash, walked through to 0x12037878 region
+- 0x1201e378: completed and returned to caller (VTABLE_STUB slots pre-populated working)
+- **New crash:** `UC_ERR_FETCH_PROT` at PC=0x0, inside JNI function at 0x12043545,
+  LR=0x12037c4f — null function pointer from second-level object deref chain.
+  Matches session15d blocker: `bl 0x12037c18` needs second fake object.
+
+### Git note
+Two agents shared git index — `_assets/brtv_*` binaries landed in commit 8361a82 (session15d
+"disasm") instead of 3ebe428 (intended "extract" commit). Verified consistent in be5a5eb.
+No data loss — commit messages only.
+
+---
+
 ## Status (2026-07-29 session 15d — `0x1201e378` fully cleared; new object needed for `0x12037c18`)
 
 **`0x1201e378` (the function reached after bypassing kill()) now completes successfully and
