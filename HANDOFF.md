@@ -4,34 +4,38 @@ For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md),
 [SESSION-2026-07-29.md](SESSION-2026-07-29.md) first.
 
-## TL;DR (session 15 — 2026-07-29 ~18:30) — READ THIS ONE FIRST
+## TL;DR (session 15c — 2026-07-29 ~19:15) — READ THIS ONE FIRST
 
-**The old P0 (`vtable+0x40` NULL) is genuinely fixed**, verified with live capstone disasm of the
-self-decrypting code (dumped post-decryption from the running unidbg process, not stale static
-bytes). Real object chain: `P2 = *(*(0x12082340))` (`= sb = 0x120868f0`, harness already
-controls this). Fixed 3 real, previously-uninitialized object fields: `P2+0x40` (vtable stub,
-now a real callable `movs r0,#1; bx lr`), `P2+0x188` (was 0, now non-zero), `P2+0x109` (zeroed).
-All verified via read-back logging.
+**Both the old P0 (`vtable+0x40` NULL) AND the unconditional `kill(pid,SIGKILL)` anti-tamper
+blocker are now bypassed.** This is the furthest any session has reached into this binary.
 
-**New true blocker, fully understood and NOT patchable the same way:** past those fixes,
-execution unconditionally reaches an inline anti-tamper `kill(pid, SIGKILL)` — traced the exact
-branch chain (see NEXT-BLOCKER.md session 15 section for full disasm) and confirmed via direct
-experiment that unidbg **deliberately throws** `UnsupportedOperationException: SIGKILL ... is
-fatal and does not return` when this `svc` actually executes. No memory/register patch after
-the `svc` fixes this — the only way forward is finding what, in a genuinely-initialized ijiami
-singleton, makes the code **never branch into this region at all** (its caller, not yet
-disassembled this session, is the next thing to look at).
+1. `vtable+0x40` — genuinely fixed via live capstone disasm (post-decryption runtime bytes, not
+   stale static guesses). Real object `P2 = *(*(0x12082340))`; fixed `P2+0x40` (vtable stub),
+   `P2+0x188`, `P2+0x109` — all previously-uninitialized, all verified via read-back logging.
+2. **The `kill(pid,SIGKILL)` blocker — found the real gate and bypassed it.** A single flag byte
+   at `0x12092944` (resolved via a PC-relative literal at `0x12037892`, same technique as #1)
+   gates a branch at `0x1203789a`: zero takes an early-exit straight into the anti-tamper/kill()
+   region; non-zero falls into the real init path. Was 0. Set to 1. **A wide execution-walk
+   trace confirmed zero kill() hits afterward** — execution now runs code (`0x1201e378`,
+   `0x12037c18`) that no prior session ever reached.
 
-Harness (`_scratch/Unpack.java`) still ends in the same **forced** `JNI_VERSION_1_6` completion
-as session 14 (soft-ret + sentinel), so `RegisterNatives`/`N.l`/`N.b2b` still don't fire — same
-symptom, but the root cause is now precisely mapped instead of guessed at.
+**New blocker, different in kind:** `0x1201e378` (not yet disassembled) does an unmapped memory
+read (`address=0x412f6db0`) — this looks like genuinely uninitialized real state (possibly a
+side effect of earlier sessions' CTOR-SKIP/CTOR-PATCH hacks), not another anti-tamper gate. See
+[`NEXT-BLOCKER.md`](NEXT-BLOCKER.md) session 15c section for the exact register dump and
+next-step plan (need to disassemble `0x1201e378`'s body to find which offset produces the bad
+pointer).
 
-**Technique unlock for future sessions:** dumping runtime memory *after* `JNI_OnLoad` executes
-(ctors have decrypted the code by then) and disassembling those exact bytes with capstone over
-SSH to `.40` gives 100%-accurate ground truth. Previous sessions' static/pre-decryption dumps and
-manual byte-guessing were frequently wrong (e.g. "obj(r0)" at the vtable `blx` was actually
-`r5`/JavaVM*, not the vtable object — a genuine trap for manual analysis). Use this technique
-first before hypothesizing about any other address in this binary.
+Harness (`_scratch/Unpack.java`) no longer needs the forced-`JNI_VERSION_1_6`/kill()-loop hack
+to get this far — that code path is effectively dead now (harmless to leave as a safety net).
+
+**Technique unlock for future sessions (still the single most valuable takeaway):** (1) dump
+runtime memory *after* `JNI_OnLoad` executes (ctors decrypt the code by then) and disassemble
+those exact bytes with capstone over SSH to `.40` — gives 100%-accurate ground truth, unlike
+prior sessions' static/pre-decryption guessing. (2) When stuck on "why does execution reach X
+instead of Y", don't bisect address-by-address — add ONE wide-range `CodeHook` logging every
+distinct address visited (`LinkedHashSet`, capped print count) across the whole suspect region
+in a single run; it reconstructs the real path immediately instead of many slow round trips.
 
 ## TL;DR (session 14 lever close — 2026-07-29 ~17:50)
 
@@ -296,14 +300,15 @@ Note: appId differs from package name (`com.android.mgstv`).
 | Stub DEX decompilation | 4 classes found | `s.h.e.l.l` package: AppComponentFactory, Application, native loader, callback. Real app class: `com.interactive.brasiliptv.app.AppWrapper`. Loader uses `DETool.loadDEso()` for decryption. |
 | libexec.so strings | No API strings | Native lib only handles decryption — actual API code is in encrypted `ijiami.dat` (4.5MB) decrypted at runtime. |
 
-## Updated next steps (session 15 — supersedes session 14 line below for priority)
+## Updated next steps (session 15c — supersedes session 15/14 lines below for priority)
 
-1. **Unidbg P0 (new):** `vtable+0x40` is fixed for real (session 15). Find the caller of
-   `0x12037a80`/what precedes it, and the condition a real singleton would satisfy to avoid
-   ever branching into the inline `kill(pid,SIGKILL)` anti-tamper region — that syscall is
-   confirmed non-returning in unidbg, so it must be avoided, not patched around. See
-   [`NEXT-BLOCKER.md`](NEXT-BLOCKER.md) session 15 section for the full traced branch chain.
-2. Once natural completion is reached, confirm `RegisterNatives` fires for `s/h/e/l/l/N`.
+1. **Unidbg P0 (new):** `vtable+0x40` fixed AND `kill(pid,SIGKILL)` anti-tamper region bypassed
+   (session 15c, via `FLAG_X` at `0x12092944`). Current blocker: disassemble `0x1201e378`'s body
+   (not yet done) to find what produces the unmapped-read address `0x412f6db0` at entry — likely
+   an uninitialized field left over from earlier ctor-skip hacks, not another anti-tamper gate.
+   See [`NEXT-BLOCKER.md`](NEXT-BLOCKER.md) session 15c section for the exact repro/dump.
+2. Once `0x1201e378`/`0x12037c18` complete cleanly, confirm `RegisterNatives` fires (offset
+   `0x35c` calls at `0x120379d0`-`0x12037a80`, JNINativeInterface index 215) for `s/h/e/l/l/N`.
 3. `N.b2b(ijiami.dat)` → DES key + portal domain.
 4. Plugin probe for `returnCode=0`.
 

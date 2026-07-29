@@ -15,6 +15,7 @@ import unicorn.ArmConst;
 import unicorn.UnicornConst;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.util.LinkedHashSet;
 
 public class Unpack extends AbstractJni {
 
@@ -495,6 +496,48 @@ public class Unpack extends AbstractJni {
         addTrace(backend, jniPhase, 0x120370feL, "big-fn gate1 result (r0) before beq 0x120371a6", ArmConst.UC_ARM_REG_R0);
         addTrace(backend, jniPhase, 0x120371a6L, "big-fn gate1 TAKEN (early-exit branch)", -1);
 
+        // 0x1201e378: real init call reached after the FLAG_X fix (session 15c) - crashes on
+        // an unmapped read inside here. Log entry args + a few registers to find the bad ptr
+        // before it dereferences it.
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 4) return;
+                long r0 = backend.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                long lr = backend.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                System.out.println(">>> [ENTRY] 0x1201e378 r0(arg)=0x" + Long.toHexString(r0)
+                        + " lr=0x" + Long.toHexString(lr));
+                try {
+                    byte[] argMem = backend.mem_read(r0, 0x20);
+                    StringBuilder sbh = new StringBuilder();
+                    for (byte x : argMem) sbh.append(String.format("%02x", x & 0xff));
+                    System.out.println(">>> *r0[0x20]: " + sbh);
+                } catch (Throwable t) {
+                    System.out.println(">>> *r0 read failed: " + t);
+                }
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x1201e378L, 0x1201e378L, null);
+
+        // Wide execution trace: log every DISTINCT address actually executed across the whole
+        // span from our vtable fix to the kill() block, in visit order. This reconstructs the
+        // real path in one run instead of bisecting address-by-address across many round trips.
+        {
+            final LinkedHashSet<Long> seen = new LinkedHashSet<>();
+            final int[] printed = {0};
+            backend.hook_add_new(new CodeHook() {
+                public void hook(Backend b, long address, int size, Object user) {
+                    if (!jniPhase[0]) return;
+                    if (seen.add(address) && printed[0]++ < 400) {
+                        System.out.println(">>> [walk] 0x" + Long.toHexString(address));
+                    }
+                }
+                public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                public void detach() {}
+            }, 0x120370e0L, 0x12037b90L, null);
+        }
+
         System.out.println(">>> loading libexec.so ...");
         File so = new File("/tmp/apkx/assets/ijm_lib/armeabi/libexec.so");
         DalvikModule dm = null;
@@ -662,6 +705,30 @@ public class Unpack extends AbstractJni {
                 System.out.println(">>> P2_SLOT_109 @0x" + Long.toHexString(P2_SLOT_109) + " zeroed");
             } catch (Throwable t) {
                 System.out.println(">>> P2_SLOT_109 pre-write FAILED: " + t);
+            }
+            // FOUND VIA WIDE WALK TRACE (session 15c): the real fork isn't in the vtable/P2
+            // object at all. `bl 0x12037878` right after our vtable fix leads to a function
+            // whose FIRST real decision is:
+            //   0x12037892: ldr r0,[pc,#0x310]; add r0,pc  -> resolves to 0x12092944 (verified
+            //               via the same literal-resolution method that correctly found
+            //               0x12082340 earlier - both alignments agree here)
+            //   0x12037896: ldrb r0,[r0]                    -> FLAG_X byte
+            //   0x12037898: cmp r0,#0
+            //   0x1203789a: beq.w #0x12037a92                -> ZERO takes the anti-tamper exit
+            //               straight to the kill()-region we've been stuck in (confirmed: the
+            //               wide walk trace showed execution jump directly from 0x1203789a to
+            //               0x12037a92, skipping everything in between)
+            // Non-zero instead falls through to `bl 0x1201e378; bl 0x12037c18` and then a real
+            // JNIEnv vtable chain - very likely the actual init path leading to the real
+            // RegisterNatives calls found earlier at 0x120379d0-0x12037a80.
+            final long FLAG_X = 0x12092944L;
+            try {
+                byte[] before = backend.mem_read(FLAG_X, 1);
+                backend.mem_write(FLAG_X, new byte[]{1});
+                System.out.println(">>> FLAG_X @0x" + Long.toHexString(FLAG_X)
+                        + " was 0x" + String.format("%02x", before[0] & 0xff) + " -> set to 1");
+            } catch (Throwable t) {
+                System.out.println(">>> FLAG_X pre-write FAILED: " + t);
             }
             // Bypass export stub: call real Thumb JNI_OnLoad directly.
             jniPhase[0] = true;

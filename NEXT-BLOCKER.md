@@ -1,13 +1,14 @@
 # Next Blocker — XuperPlugin portalCore
 
-## Status (2026-07-29 session 15 — real disasm, vtable+0x40 genuinely fixed, new true blocker found)
+## Status (2026-07-29 session 15c — the unconditional kill() blocker is BYPASSED; new, deeper crash found)
 
-**vtable+0x40 (the old P0) is SOLVED for real**, not hacked — verified via live capstone disasm
-of the self-decrypted code (previous sessions never had ground truth here, only guesses).
-**New true blocker:** JNI_OnLoad's inline anti-tamper code unconditionally reaches a
-`kill(pid, SIGKILL)` syscall that **unidbg deliberately treats as non-returning** — no
-register/memory patch can neutralize it after the fact. Need to find the real, earlier gate
-that a legitimately-initialized singleton would satisfy to avoid this code path altogether.
+**The "unconditional kill(pid,SIGKILL)" blocker (session 15a/b) is bypassed.** Found the real
+gate via a wide execution-walk trace: a single flag byte at `0x12092944` was 0, forcing an
+early-exit branch straight into the anti-tamper/kill() region. Setting it to 1 redirects
+execution into the REAL init path (`bl 0x1201e378`) — confirmed via the walk trace, no more
+kill() hits at all. **New crash, further in than any prior session has reached:** `0x1201e378`
+does an unmapped read at `0x412f6db0` — a different, genuine bug (uninitialized real state,
+likely from something our earlier ctor-skip hacks left un-set), not related to vtable/kill().
 
 Full log: [`SESSION-2026-07-29.md`](SESSION-2026-07-29.md). Handoff: [`HANDOFF.md`](HANDOFF.md).
 
@@ -114,23 +115,69 @@ calls found this session are very likely NOT on our current path at all**, or ar
 via a different caller/branch we haven't identified yet. Do not assume they're the fix without
 re-verifying reachability first.
 
+### RESOLVED this session — the `0x12037a80`/`0x12037a92` mystery, and the kill() blocker itself
+The lead above (RegisterNatives-shaped code at `0x120379d0`-`0x12037a80` not being reached) was
+correct: **it wasn't the real path at all.** A wide execution-walk hook (log every distinct
+address visited across `0x120370e0`-`0x12037b90`, one run) found the *actual* fork:
+
+```
+0x120370c8-0x120370ca: (right after our vtable fix)  bl #0x12037878    <- calls this, for real
+0x12037878-0x1203789a: real function prologue, then:
+  0x12037892: ldr r0,[pc,#0x310]; add r0,pc  -> resolves to 0x12092944 (verified: literal
+              0x5b0ac + pc(0x12037898) — same resolution method that correctly found
+              0x12082340 earlier)
+  0x12037896: ldrb r0,[r0]                    -> FLAG_X byte, was 0
+  0x12037898: cmp r0,#0
+  0x1203789a: beq.w #0x12037a92                -> ZERO takes this branch straight into the
+              anti-tamper/kill() region (0x12037a80-b40) that sessions 14/15a/15b got stuck in.
+              This is *why* `0x12037a80`'s own entry instruction and the RegisterNatives-shaped
+              code at `0x120379d0` never appeared reachable - they're on the OTHER (real-init)
+              side of this branch, never the anti-tamper side.
+```
+
+**Fix:** `mem_write(0x12092944, {1})` — set FLAG_X non-zero *before* calling `JNI_OnLoad`.
+**Verified via the same walk trace:** execution now goes `0x1203789a → 0x1203789e → 0x120378a0`
+(the real-init side: `bl 0x1201e378; bl 0x12037c18`) instead of `→ 0x12037a92`. **Zero kill()
+hits in this run** — the entire anti-tamper/kill()-loop blocker from sessions 14/15a/15b is
+gone. This is the furthest any session has gotten into this binary.
+
+### New blocker (session 15c) — unmapped read inside `0x1201e378`, a genuinely new/different bug
+```
+WARN ... Read memory failed: address=0x412f6db0, size=4, PC=RX@0x1201e378[libexec.so]0x1e378,
+     LR=RX@0x120378a5[libexec.so]0x378a5
+```
+Entry: `r0` (arg to `0x1201e378`) = `0xfffe12a0`, first 32 bytes:
+`f00efeff000000000000000000000000e60100ef1eff2fe10000000000000000` — same `0xfffe....`-region
+pattern seen before for JavaVM*/stack-adjacent structures (not a heap object we control).
+`0x412f6db0` itself looks like uninitialized/garbage data, **not** a value derived from `r0`'s
+first 32 bytes — the bad read is likely at some **further offset** into `r0`'s structure, or
+from a **different register** entirely (not yet isolated). This is a *different class* of bug
+than the vtable/kill() issues — likely uninitialized real state that our earlier CTOR-SKIP/
+CTOR-PATCH hacks (from session 12-13) left unset, now that we're finally executing code that
+actually depends on it.
+
 ### Next steps (ordered) — session 16
-1. **Find what CALLS into `0x12037a80`/`0x12037a92`** (LR at that point, captured live, is the
-   fastest way — an entry hook at `0x12037a80` was added this session but never fired, so the
-   entry must be a jump straight into the block's *middle*; try hooking a few addresses between
-   `0x12037a80` and `0x12037a92` to bisect exactly where control lands).
-2. Separately, verify whether the `0x120379d0`/RegisterNatives-shaped code is reachable from
-   *anywhere* in this run (e.g. hook `0x120379d0` itself, and the `blx #0x1207b310` at
-   `0x120370e0` that's supposed to lead there) — if it's truly dead on this path, find what
-   **does** call real `RegisterNatives` (search for other `+0x35c` vtable-offset patterns, or
-   for `bmi`/negative-return JNI-convention checks elsewhere in the decrypted function).
-3. Once the real `RegisterNatives` call is confirmed reachable and executing, verify `N.l`/
-   `N.b2b` resolve. Only then: `N.b2b(ijiami.dat)` → DES key + portal domain → plugin probe.
+1. **Isolate the bad pointer inside `0x1201e378`.** Dump more than 32 bytes of `r0`'s struct at
+   entry (or all registers) right when the crash fires — need a hook a few instructions into
+   `0x1201e378` (its body hasn't been disassembled yet at all) to see exactly which
+   register/offset produces `0x412f6db0`. Use the same "dump post-decryption runtime bytes →
+   SSH capstone" technique that worked for every fix this session.
+2. Once `0x1201e378` and `0x12037c18` (the next call after it) complete cleanly, the walk trace
+   should reach the real `RegisterNatives` calls at `0x120379d0`-`0x12037a80` (offset `0x35c` =
+   JNINativeInterface index 215) — confirm `N.l`/`N.b2b` resolve after that.
+3. Only then: `N.b2b(ijiami.dat)` → DES key + portal domain → plugin probe.
+
+### Do NOT (session 15c addition)
+- Don't reintroduce the kill()-hook's forced-completion path as the primary strategy — FLAG_X
+  bypasses the entire anti-tamper region for real now; the kill()-hook is dead code on this path
+  (harmless to leave in as a safety net, but don't rely on it going forward).
 
 ### Reproduce (updated for session 15's harness)
 Same as before — `_scratch/Unpack.java` + `_scratch/run_lever_remote.py`, unchanged interface.
-The new diagnostics (`[trace] ...` lines, `VTABLE_SLOT_40`/`P2_SLOT_188`/`P2_SLOT_109` prints)
-are gated so they don't affect behavior, just visibility.
+The new diagnostics (`[trace]`/`[walk]`/`[ENTRY]` lines, `VTABLE_SLOT_40`/`P2_SLOT_188`/
+`P2_SLOT_109`/`FLAG_X` prints) are gated so they don't affect behavior, just visibility. Current
+run now crashes (unmapped read) rather than looping — that's expected/correct given where we
+are; it means we're past the old blocker into new, previously-unreached territory.
 
 ---
 
