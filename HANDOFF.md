@@ -3,25 +3,23 @@
 For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md) first.
 
-## TL;DR (updated 2026-07-27 session 10)
+## TL;DR (session 12 — 2026-07-29)
 
-> **READ [`NEXT-BLOCKER.md`](NEXT-BLOCKER.md) top section first.**
+> **READ [`NEXT-BLOCKER.md`](NEXT-BLOCKER.md) for full status.**
 > Full log: [`SESSION-2026-07-27.md`](SESSION-2026-07-27.md).
 
-**Done:** cold-start tcpdump on `.4` (846 pkts) + targeted port-80 capture; bootstrap
-expanded to **19 hosts**; `probePortalBootstrap()` now tags **`[SYN]` / `[FAIL]`** vs real
-**`[✓Nch]`** (`LiveDataFetch` / `probeGetLiveData`). Tooling: `scripts/deep_analyze_pcap.py`,
-`_session/capture_portal.sh`, `_session/capture_sgyc_port80.sh`.
+**Done:** Full API format recovered. 3DES body crypto 100% proven. 65+ hosts probed
+across XTV + 3 sister apps — version gate + CF WAF are universal. Plugin builds +
+deploys + probes. Sister APKs analyzed (BrasilTV ijiami, TeleLatino SecNeo, YouCine
+ijiami). Unidbg on `.40` — 36 iterations, singleton buffer + GOT fix working, one
+self-decrypting ctor trap remains before DEX decryption.
 
-**Findings:** `sgyc` / `ycout` are **WebSocket** endpoints (not portalCore). New TLS SNI
-`34fhwevf.cbcf4gg3f.com` on cold start; still no cleartext `portalCore` POST on port 80.
+**Blocker:** DES domain key inside libexec.so's ijiami layer. Unidbg is one ctor
+away. frida definitively blocked by ijiami v4.
 
-**Blocked:** all probed hosts still **`portal200001`** or **403/404** — true DES-resolved
-portalCore host not identified (likely pinned TLS + opaque path).
-
-**Next:** (1) longer **443** capture during cold start / channel play — hunt **new SNIs**;
-(2) heap / `/proc` strings for resolved host after login; (3) fresh **`s`/`t`** MITM;
-(4) after `returnCode=0` → `getColumnContents` → `getLiveData(channelId)` → proxy refresh.
+**Next:** `.40` — identify self-decrypting ctor via Ghidra, NOP it → JNI_OnLoad succeeds
+→ RegisterNatives → call N.b2b(ijiami.dat) → get decrypted DEX → extract DES key
+→ decrypt portalCore host → `returnCode=0` → wire pipeline.
 
 ---
 
