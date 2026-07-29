@@ -1,10 +1,23 @@
 # Next Blocker — XuperPlugin portalCore
 
-## Status (2026-07-27 session 10)
+## Status (2026-07-29 session 11)
 
-**Plugin probes are honest again (`[SYN]` vs `[✓Nch]`). Cold-start wire capture found new
-domains but not cleartext portalCore — `sgyc`/`ycout` are WebSocket only. Every bootstrap
-host still version-gates or WAF-blocks; DES-resolved portalCore host remains unknown.**
+**Version gate is universal across 63+ hosts, 4 apps, 2 regions. DES key = only path.
+TeleLatino DEX reveals domain_DES uses DESede/CBC (different from body 3DES/ECB).
+frida blocked by ijiami v4. Memory dump + offline key derivation is the path forward.**
+
+## Session 11 — TeleLatino DEX analysis (SecNeo protection)
+
+baksmali decompiled 20MB classes.dex: only 7 stub classes visible (SecNeo wrapper).
+But SecNeo doesn't encrypt string constants. Key findings from DEX strings:
+- `domain_DES=` — config key, `DESedeKeySpec`+`SecretKeySpec`+`IvParameterSpec` = DESede/CBC
+- `PORTAL_MAIN`, `portal_main`, `DomainCache` — domain config field names
+- `EventDbModel` stores `cipherStr` column for encrypted domain/event data
+- No hardcoded DES key (derived at runtime or in native libs)
+
+## Session 11 — frida definitively blocked
+
+ijiami v4 detects frida agent injection before any JS runs. All methods failed.
 
 ---
 
