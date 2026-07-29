@@ -118,17 +118,28 @@ portal_code values. **No app is "weak" — all have encryption/protection layers
 | Florida/hluda (pre-built) | No ARM binaries available |
 | Unidbg off-device emulation | **36 iterations, closest approach** |
 
-### Unidbg status (the closest path)
-- ✅ libexec.so fully loads (63 ctors, all passed except the gating one)
-- ✅ JNI_OnLoad reaches RegisterNatives when forced
-- ✅ Singleton classname buffer populated at 0x120868f0 ("android/content/pm/ApplicationInfo")
-- ✅ GOT[0x12082340] + singleton[0x120868e0] pointer fix working
-- ✅ Sanity check returns 0 (skip init path, no deadlock)
-- ❌ **Blocker: crash at 0x1203725c** — libexec.so self-decrypts code section at
-  runtime, corrupting valid instructions into garbage. The emulator throws
-  "Invalid instruction (UC_ERR_INSN_INVALID)" before hooks can intercept.
-  `mem_protect + mem_write` blocked (UC_ERR_NOMEM — memory tracked by unicorn,
-  not unidbg). **One ctor among 63 corrupts this address at runtime.**
+### Unidbg status (the closest path — 40 total iterations)
+- ✅ libexec.so fully loads (all 63 ctors pass with fixes)
+- ✅ Singleton classname buffer populated at 0x120868f0 ("android/content/pm/ApplicationInfo"
+  and "targetSdkVersion" strings — confirmed byte-by-byte via write watches)
+- ✅ GOT[0x12082340] → 0x120868e0 → 0x120868f0 pointer chain: WORKING (FIX fires)
+- ✅ Sanity check returns 0 (skip init path, no deadlock trap)
+- ✅ CTOR-PATCH, CTOR-SKIP hooks confirmed firing
+- ❌ **Blocker: crash at 0x1203725c** — **intentional anti-tamper trap, NOT self-decryption.**
+  The instruction at 0x1203725c is VALID code that reads from unmapped memory when
+  anti-tamper conditions aren't met. This is a DESIGNED crash, not corruption.
+  - MEM_WRITE guard (run37-38): 256 writes caught + restored correctly. Crash still
+    occurs because the instruction itself is designed to fault, not corrupted.
+  - CodeHook skip (run34-35,39-40): Hook fires at 0x1203725c, advances PC by 2/4, but
+    unicorn validates intermediate addresses and throws UC_ERR_INSN_INVALID at 0x1203725d
+    (T32 instruction boundary between hook point and skip target).
+  - mem_protect + mem_write bx lr: UC_ERR_NOMEM (unicorn native tracks memory, not unidbg)
+  - **Fix needed:** Find the CALLER (BL/BLX) of 0x1203725c via Ghidra and NOP IT,
+    OR use unicorn native uc_mem_write to write bx lr (0x4770) at the crash address,
+    OR use unidbg Memory.patch() API for runtime code patching.
+  After fix: JNI_OnLoad returns JNI_VERSION_1_6 → RegisterNatives fires → N.l + N.b2b
+  callable → call N.b2b(ijiami.dat) → decrypted DEX → extract DES key → decrypt
+  portalCore host → returnCode=0 → full pipeline live.
 
 ---
 
@@ -155,40 +166,38 @@ portal_code values. **No app is "weak" — all have encryption/protection layers
 
 ## Next steps (ordered by impact)
 
-### 1. **Unidbg — identify the self-decrypting ctor** ⭐
-The crash at 0x1203725c is caused by one of the 63 ctors writing garbage to the
-code section. On `.40`, use Ghidra to trace libexec.so's init_array (list of ctor
-function pointers). Hook each ctor entry, log which one writes to 0x1203725c range,
-NOP that ctor. After that, FORCE-RET hook on JNI_OnLoad should fire, RegisterNatives
-should register N.l/b2b, and calling N.b2b with ijiami.dat should return the
-decrypted DEX.
+### 1. Unidbg — NOP the crash at 0x1203725c via caller hook ⭐⭐⭐
+Three approaches, try in order:
+- **A) Ghidra disassembly** on .40: find the BL/BLX that calls 0x1203725c, hook that
+  CALL site and skip it (prevent the crash function from being entered at all).
+- **B) unicorn native mem_write:** use `emulator.getBackend().mem_write()` which
+  may bypass unidbg's memory tracking and write bx lr directly to 0x1203725c.
+- **C) unidbg Memory.patch():** check if `emulator.getMemory().patch()` or similar
+  API exists for runtime code patching within unidbg's memory model.
 
-Files on `.40`: `~/xtv-ghidra/harness/src/main/java/com/xtv/Unpack.java` (392 lines),
-`~/xtv-ghidra/unidbg/` (patched source), assets at `/tmp/apkx/assets/`.
+After fix: JNI_OnLoad reaches normal return → RegisterNatives fires → N.l + N.b2b
+callable → call N.b2b(ijiami.dat) → DEX decrypted → DES key extracted.
 
-### 2. **Baksmali re-deploy TeleLatino DEX**
-Previous download was corrupt. Re-download baksmali 2.5.2 from:
-`https://bitbucket.org/JesusFreke/smali/downloads/baksmali-2.5.2.jar`
-Decompile the 20MB classes.dex from TeleLatino.apk. SecNeo stubs (7 classes) may
-contain the DES key derivation code, or the key may be in the encrypted payload
-but accessible via the stub interface.
+### 2. Decompile TeleLatino DEX for DES key derivation code
+Re-download baksmali from: `https://bitbucket.org/JesusFreke/smali/downloads/baksmali-2.5.2.jar`
+Decompile 20MB classes.dex. SecNeo doesn't encrypt strings — `domain_DES=`, `DESedeKeySpec`,
+`SecretKeySpec`, `IvParameterSpec`, `getDomain`, `setDomain`, `domainKey` all readable.
+The DESede/CBC domain decryption code may reveal key derivation algorithm.
 
-### 3. **XTV on-device memory dump (root .4)**
-Dump XTV process memory after a channel switch (triggers getLiveData). The
-DES-resolved portalCore host IS in RAM. Search for new obfuscated domain patterns
-adjacent to portalCore API paths. Works — we already found joqotx/wetc this way
-for TeleLatino.
+### 3. XTV heap dump on .4 after channel switch
+Root on .4, trigger getLiveData by changing channel, dump dalvik heap, search for
+portalCore host adjacent to `/api/portalCore/v6/getLiveData` in memory. Already works
+for TeleLatino (found joqotx/wetc). Do the same for XTV.
 
-### 4. **.37 native lib recovery**
-Brasil TV's native libs are world-readable (11.4MB of .so files, readable via
-telnet: `cat /data/data/com.interactive.brasiliptv/lib/*.so`). The DES key
-derivation may be in one of these accessible libraries. Pull them to Win11
-via the HTTP server method (box downloads from Win11).
+### 4. .37 native lib recovery via HTTP
+Brasil TV native libs are world-readable: `cat /data/data/com.interactive.brasiliptv/lib/*.so`
+(11.4MB). Start Python HTTP server on Win11, have .37 download and run analysis script
+that searches for DES key patterns, then uploads results.
 
-### 5. **After DES key is recovered**
-Decrypt `domain|DES` blobs → get real portalCore host → probe with plugin →
-expected `returnCode=0` → implement getColumnContents → getLiveData(channelId)
-→ M3uProxyServer refresh loop → continuous live.
+### 5. After DES key recovery
+Decrypt domain|DES blobs → get XTV portalCore host → probe with plugin →
+returnCode=0 → implement getColumnContents → getLiveData(channelId) →
+M3uProxyServer refresh loop → continuous live TV.
 
 ---
 

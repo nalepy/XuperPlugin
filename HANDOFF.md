@@ -3,23 +3,27 @@
 For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md) first.
 
-## TL;DR (session 12 — 2026-07-29)
+## TL;DR (session 12 close — 2026-07-29 14:40)
 
 > **READ [`NEXT-BLOCKER.md`](NEXT-BLOCKER.md) for full status.**
 > Full log: [`SESSION-2026-07-27.md`](SESSION-2026-07-27.md).
 
-**Done:** Full API format recovered. 3DES body crypto 100% proven. 65+ hosts probed
-across XTV + 3 sister apps — version gate + CF WAF are universal. Plugin builds +
-deploys + probes. Sister APKs analyzed (BrasilTV ijiami, TeleLatino SecNeo, YouCine
-ijiami). Unidbg on `.40` — 36 iterations, singleton buffer + GOT fix working, one
-self-decrypting ctor trap remains before DEX decryption.
+**Done (12 sessions):** Full API format recovered. 3DES body crypto 100% proven.
+65+ hosts probed (universal version gate). 4 sister APKs analyzed (BrasilTV/TeleLatino/
+YouCine). Plugin builds+deploys+probes. Session save/restore working.
+Unidbg on `.40`: 40 iterations, singleton+GOT fix working, crash at 0x1203725c
+identified as intentional anti-tamper trap (valid instruction reads unmapped memory),
+NOT self-decryption as previously thought. MEM_WRITE guard proved bytes aren't corrupted.
+CodeHook skip blocked by unicorn address validation.
 
-**Blocker:** DES domain key inside libexec.so's ijiami layer. Unidbg is one ctor
-away. frida definitively blocked by ijiami v4.
+**Blocker:** DES domain key inside libexec.so. Unidbg is one instruction fix away.
 
-**Next:** `.40` — identify self-decrypting ctor via Ghidra, NOP it → JNI_OnLoad succeeds
-→ RegisterNatives → call N.b2b(ijiami.dat) → get decrypted DEX → extract DES key
-→ decrypt portalCore host → `returnCode=0` → wire pipeline.
+**Next session (3 options, try in order):**
+1. Unidbg on `.40`: Ghidra find BL/BLX caller of 0x1203725c → NOP it (best)
+   OR unicorn native mem_write bx lr at 0x1203725c (simpler)
+   OR unidbg Memory.patch() API (cleanest)
+2. Baksmali decompile TeleLatino DEX → find DESede/CBC domain decryption code
+3. XTV heap dump on .4 → find DES-resolved portalCore host
 
 ---
 
