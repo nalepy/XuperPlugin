@@ -3,27 +3,23 @@
 For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md) first.
 
-## TL;DR (session 12 close — 2026-07-29 14:40)
+## TL;DR (session 13 close — 2026-07-29 15:48)
 
 > **READ [`NEXT-BLOCKER.md`](NEXT-BLOCKER.md) for full status.**
 > Full log: [`SESSION-2026-07-27.md`](SESSION-2026-07-27.md).
 
-**Done (12 sessions):** Full API format recovered. 3DES body crypto 100% proven.
-65+ hosts probed (universal version gate). 4 sister APKs analyzed (BrasilTV/TeleLatino/
-YouCine). Plugin builds+deploys+probes. Session save/restore working.
-Unidbg on `.40`: 40 iterations, singleton+GOT fix working, crash at 0x1203725c
-identified as intentional anti-tamper trap (valid instruction reads unmapped memory),
-NOT self-decryption as previously thought. MEM_WRITE guard proved bytes aren't corrupted.
-CodeHook skip blocked by unicorn address validation.
+**Session 13 (9 unidbg runs, 41-49):** Crash at 0x1203725c = anti-tamper loop (NOP + CBNZ → branch-to-NULL).
+.init_array parsed: 63 ctors, ctor[12]=0x12037289 contains crash. Crash reached via multiple paths
+(init_array dispatch + JNI_OnLoad). Brute-force PC jump (v7) proved bypass possible — reached deep
+into JNI_OnLoad before secondary crash. Decrypted instruction bytes dumped: `00bf 72b9 b0b5 084d`.
+All 9 approaches hit same fundamental issue: no valid return frame (LR always unidbg sentinel 0xffff0000),
+and cascading anti-tamper checks cause secondary failures.
 
-**Blocker:** DES domain key inside libexec.so. Unidbg is one instruction fix away.
+**Next session:** Ghidra disassembly of decrypted code OR multi-level bypass chain OR pivot to .37 static analysis.
 
-**Next session (3 options, try in order):**
-1. Unidbg on `.40`: Ghidra find BL/BLX caller of 0x1203725c → NOP it (best)
-   OR unicorn native mem_write bx lr at 0x1203725c (simpler)
-   OR unidbg Memory.patch() API (cleanest)
-2. Baksmali decompile TeleLatino DEX → find DESede/CBC domain decryption code
-3. XTV heap dump on .4 → find DES-resolved portalCore host
+**Done (13 sessions):** Full API format recovered. 3DES body crypto 100% proven.
+65+ hosts probed (universal version gate). 4 sister APKs analyzed. Plugin builds+deploys+probes.
+Unidbg: 49 iterations, singleton+GOT working, ctor list mapped, crash site decoded.
 
 ---
 

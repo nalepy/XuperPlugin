@@ -118,25 +118,48 @@ portal_code values. **No app is "weak" — all have encryption/protection layers
 | Florida/hluda (pre-built) | No ARM binaries available |
 | Unidbg off-device emulation | **36 iterations, closest approach** |
 
-### Unidbg status (the closest path — 40 total iterations)
+### Unidbg status (49 total iterations — session 13: 9 more runs)
+
 - ✅ libexec.so fully loads (all 63 ctors pass with fixes)
-- ✅ Singleton classname buffer populated at 0x120868f0 ("android/content/pm/ApplicationInfo"
-  and "targetSdkVersion" strings — confirmed byte-by-byte via write watches)
-- ✅ GOT[0x12082340] → 0x120868e0 → 0x120868f0 pointer chain: WORKING (FIX fires)
-- ✅ Sanity check returns 0 (skip init path, no deadlock trap)
-- ✅ CTOR-PATCH, CTOR-SKIP hooks confirmed firing
-- ❌ **Blocker: crash at 0x1203725c** — **intentional anti-tamper trap, NOT self-decryption.**
-  The instruction at 0x1203725c is VALID code that reads from unmapped memory when
-  anti-tamper conditions aren't met. This is a DESIGNED crash, not corruption.
-  - MEM_WRITE guard (run37-38): 256 writes caught + restored correctly. Crash still
-    occurs because the instruction itself is designed to fault, not corrupted.
-  - CodeHook skip (run34-35,39-40): Hook fires at 0x1203725c, advances PC by 2/4, but
-    unicorn validates intermediate addresses and throws UC_ERR_INSN_INVALID at 0x1203725d
-    (T32 instruction boundary between hook point and skip target).
-  - mem_protect + mem_write bx lr: UC_ERR_NOMEM (unicorn native tracks memory, not unidbg)
-  - **Fix needed:** Find the CALLER (BL/BLX) of 0x1203725c via Ghidra and NOP IT,
-    OR use unicorn native uc_mem_write to write bx lr (0x4770) at the crash address,
-    OR use unidbg Memory.patch() API for runtime code patching.
+- ✅ Singleton classname buffer populated at 0x120868f0
+- ✅ GOT[0x12082340] → 0x120868e0 → 0x120868f0 pointer chain: WORKING
+- ✅ Sanity check returns 0, CTOR-PATCH fires, CTOR12-SKIP fires
+- ✅ .init_array parsed: 63 ctors, **ctor[12]=0x12037289 = anti-tamper function containing crash**
+- ✅ **CRASH-BYPASS (v7, approach G):** brute-force jump to safe PC 0x1202e2b7 worked —
+  execution reached deeper into JNI_OnLoad (LR=0x1202e4bb) before secondary crash.
+  Proves bypass is possible.
+- ✅ **Decrypted instruction bytes dumped (v9):** `00bf 72b9 b0b5 084d` at 0x1203725c.
+  First instruction is NOP (0xbf00), second is CBNZ loop — self-decryption confirmed working,
+  anti-tamper code is a loop that branches to NULL.
+
+- ❌ **Blocker: crash at 0x1203725c** — **intentional anti-tamper, reached via multiple paths.**
+  #### Approaches tried (session 13, runs 41-49):
+  | # | Approach | Result |
+  |---|----------|--------|
+  | v1 | bx lr via mem_write in CodeHook | ∞ loop: LR=0xffff0000 (unidbg sentinel), dispatch re-enters |
+  | v2 | POP {PC} from stack | savedLR=0x0, jumps to NULL → FETCH_UNMAPPED |
+  | v3 | Auto-map unmapped reads + NULL page | FETCH_PROT at 0x0 (loaded NULL function pointer) |
+  | v4 | BL-SKIP at suspected caller 0x120370c8 | Never fired — wrong call path |
+  | v5 | CTOR12-SKIP at 0x12037288 | Hook fired, ctor skipped, crash still happens (JNI_OnLoad path) |
+  | v6 | Pre-map 0x1000-0x1000000 (16MB) | No help — crash is FETCH from computed NULL, not unmapped read |
+  | v7 | Brute-force jump to safe PC 0x1202e2b7 | **BEST RESULT:** bypass fired, reached deep JNI_OnLoad, secondary crash at stacked code |
+  | v8 | Capture LR at ctor entry, use at crash | LR always 0xffff0000 (sentinel), fallback gives 0x0 |
+  | v9 | Dump decrypted bytes + NOP | Decrypted bytes: `00bf 72b9 b0b5 084d` — CBNZ creates ∞ loop with NOP |
+
+  #### Key findings:
+  - Crash site reached from MULTIPLE paths: init_array ctor dispatch AND JNI_OnLoad call chain
+  - LR always 0xffff0000 = unidbg's init_array dispatch sentinel — no real call frame
+  - After self-decryption, code at 0x1203725c is: NOP + CBNZ (loop) + branch-to-NULL
+  - Pre-mapping memory doesn't help — the code INTENTIONALLY computes NULL pointer and branches to it
+  - Stack-smashing bypass (v7) proves the anti-tamper CAN be skipped, but cascading checks cause secondary crashes
+
+  #### Next approaches to try:
+  1. **Ghidra disassembly** of decrypted code (0x1203725c-0x12037270) to understand exact instruction sequence
+  2. **Multi-level bypass chain:** hook each anti-tamper site in sequence (0x1203725c, then 0x1202e4bb, etc.)
+  3. **Ctor-level blanket skip:** hook ALL 63 ctors and skip ones near crash range, let JNI_OnLoad path through
+  4. **Unicorn native API:** use `uc_mem_write` directly (bypass unidbg Memory tracking) to write bx lr at crash site BEFORE code executes — need to check if Unicorn2Backend exposes raw uc_engine
+  5. **Pivot to .37:** extract native libs via telnet, static analysis for DES key (bypasses unidbg entirely)
+
   After fix: JNI_OnLoad returns JNI_VERSION_1_6 → RegisterNatives fires → N.l + N.b2b
   callable → call N.b2b(ijiami.dat) → decrypted DEX → extract DES key → decrypt
   portalCore host → returnCode=0 → full pipeline live.
