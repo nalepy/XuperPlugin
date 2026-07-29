@@ -1,5 +1,44 @@
 # Next Blocker — XuperPlugin portalCore
 
+## Status (2026-07-29 session 16 — `0x12037c18` REALLY fixed; new blocker is a self-decrypting native-method table with a bogus iteration count)
+
+**`bl 0x12037c18` (session15d/e's blocker) is fully cleared, for real** — not a second fake
+object as session15d/e hypothesized. Live register-dump hooks (methodology from the task brief)
+proved: `sb`(r9) resolves to our **own already-known** `sa` GOT slot (`0x120868e0`) — the
+"different GOT slot" theory in session15d/e was a false lead, corrected this session. `*(sb)=P2`
+(same singleton). The real bug was simply that **`P2+0x24`** (`0x12086914`) — a slot nobody had
+populated — held `0`, so the call's `that` pointer was `0`, so `*(that+0x38)` read off the mapped
+null page as `0`, so `blx r4` jumped to `PC=0` → `FETCH_PROT`. **Fix:** `P2+0x24` = self-ref `P2`
+(same trick as `P2+0x10`), `P2+0x38` (`0x12086928`) = `VTABLE_STUB|1`. Verified via the same
+register-dump hooks: `that=P2`, `*(that+0x38)=VTABLE_STUB`, `blx` succeeds, stub entered, `r0=1`
+returned. Confirmed via walk trace: execution reaches `0x120378a4`/`0x120378a6` (the instructions
+right after `bl 0x12037c18`), something no prior run reached.
+
+**New blocker, different in kind — not a null-pointer/vtable-chain bug:** immediately after,
+the same enclosing function runs into a **self-decrypting native-method table walk** that crashes
+with `UC_ERR_READ_UNMAPPED, address=0x12280001, size=1` at `PC=0x1203a36e` (inside a small
+per-entry XOR-decrypt routine at `0x1203a314`, called in a loop from `0x12037dbc`). The loop's
+iteration bound (`sl`/r10) is wildly larger than the real table (which, from what's actually at
+the base pointer `0x12240484`, appears to hold only ~5-6 real entries) — the loop walks roughly
+12,700 non-existent 0x10-byte entries past the real data before hitting unmapped memory. Root
+cause not yet found: needs tracing back to where the entries buffer and its size/count are set
+up, further back than anything dumped this session. See session 16 section below for full
+disasm (via capstone on `.40`, ground truth) of both the decrypt routine and its caller loop.
+
+**Do NOT** re-introduce the "second fake object for `sb`/r9" theory from session15d/e — it's now
+disproven; `sb` is our own `sa`. Do NOT assume `cbz r4` at `0x12037c5e` (branching between a
+"build string table" path at `0x12037cac` and the "decrypt existing table" path at `0x12037da4`)
+is caused by our fixes — `r4` there is the *entries buffer pointer* (`0x12240484`), preserved
+across `0x12037c18`'s call frame (it `push {r4,r5,r6,r7,lr}`s and restores them), not the fn ptr
+we resolved inside that call. Taking the decrypt path is the CORRECT branch given a non-null
+buffer pointer; the bug is downstream (the loop bound), not the branch choice itself.
+
+Full log: [`SESSION-2026-07-29.md`](SESSION-2026-07-29.md) (see "Session 16 (unidbg lever)"
+section — the OTHER "Session 16 (DES pipeline prep)" section is unrelated prep work by a
+concurrent agent, ignore for this track). Handoff: [`HANDOFF.md`](HANDOFF.md).
+
+---
+
 ## Status (2026-07-29 session 15e — BTV extraction + unidbg confirms 0x1203725c bypassed)
 
 **BrasilTV libexec.so + ijiami.dat extracted from .37** without root — APKs are world-readable.
@@ -11,6 +50,165 @@ Unidbg with BTV binary confirms: 0x1203725c blocker **fully bypassed**, executio
 different GOT slot chain (`sb`/r9 → `*(obj+0x24)` → `*(that+0x38)`) + `*(obj+0x44)` call arg.
 
 Full log: [`SESSION-2026-07-29.md`](SESSION-2026-07-29.md). Handoff: [`HANDOFF.md`](HANDOFF.md).
+
+---
+
+## Session 16 — `0x12037c18` really cleared; new self-decrypting method-table blocker (2026-07-29 ~20:10-20:50)
+
+### Method used (per the task's proven recipe)
+Added register-dump `CodeHook`s at each exact address in session15d/e's partial disasm
+(`0x12037c3a`, `0x12037c3e`, `0x12037c40`, `0x12037c42`, `0x12037c4c`) instead of hand-resolving
+the literal pool. First run (no fix yet) gave 100% ground truth in one shot:
+
+```
+[12037c18] at 0x12037c3a: sb(r9)=0x120868e0        <- THIS IS OUR OWN `sa`! Not a new GOT slot.
+[12037c18] *(sb) = 0x120868f0                       <- = P2, our own singleton, confirmed.
+[12037c18] at 0x12037c3e: r0(obj)=0x120868f0        <- obj = P2
+[12037c18] *(obj+0x24) = 0x0                        <- P2+0x24, never populated -> 0
+[12037c18] at 0x12037c40: r0(obj)=0x120868f0 (about to deref +0x44 for call arg)
+[12037c18] *(obj+0x44) = 0x0                        <- call arg, unused by our stub, harmless
+[12037c18] at 0x12037c42: r1(that)=0x0 (about to deref +0x38 for fn ptr)
+[12037c18] *(that+0x38) = 0x0                       <- *(0+0x38) reads the mapped null page -> 0
+[trace] 0x12037c18 fn ptr (r4) right before blx = 0x0
+FETCH_PROT at PC=0x0                                <- matches the crash reported at session start
+```
+
+**Session15d/e's "second, separate fake object via a different GOT slot" theory is DISPROVEN.**
+`sb` is our own known `sa` (`0x120868e0`); `*(sb)` is our own known `P2`. There is only ONE
+object here, same as every other blocker this session — the bug is just an unpopulated offset,
+`P2+0x24`, that nobody had written yet (session15d only got as far as `P2+0x10`/`+0x18`/`+0x35c`
+etc., never `+0x24`).
+
+### Real fix applied
+```java
+final long P2_SLOT_24 = P2 + 0x24; // 0x12086914 -> self-ptr P2 (same trick as P2+0x10)
+final long P2_SLOT_38 = P2 + 0x38; // 0x12086928 -> VTABLE_STUB|1
+```
+Verified via the same register-dump hooks on a second run: `that=P2` (`0x120868f0`),
+`*(that+0x38)=VTABLE_STUB` (`0x7f000801`), `blx r4` succeeds, `VTABLE_STUB entry reached` fires,
+`r0=1` returned. **Confirmed via the wide walk trace: execution reaches `0x120378a4`/`0x120378a6`**
+— the two instructions immediately after `bl 0x12037c18` in the caller — something no prior
+session's run ever reached. `0x12037c18` is genuinely, naturally cleared.
+
+### New blocker: a self-decrypting native-method table, walked with a bogus iteration count
+The very next thing that happens (still inside the same enclosing function) is qualitatively
+different from every blocker so far — not a null pointer, a **loop that reads far past the end
+of a small real data buffer**. Disassembled via capstone on `.40` (ground truth, not guesses) —
+two ranges:
+
+**`0x12037c50`-`0x12037dcc` (the caller):**
+```
+0x12037c50: movs r0,#0x3c; blx #0x1207b3c0        ; malloc(0x3c) -> r0
+0x12037c56: ldr.w r1,[sb]; str.w r0,[r1,#0x18c]    ; P2+0x18c = malloc'd ptr (a slot we'd never
+                                                    ;   touched before - not needed for this path)
+0x12037c5e: cbz r4, #0x12037cac                    ; r4 = ENTRIES BUFFER PTR (preserved across
+                                                    ;   0x12037c18's call frame - that function
+                                                    ;   push{r4,r5,r6,r7,lr}s and restores them,
+                                                    ;   so r4 here is NOT the fn ptr resolved
+                                                    ;   inside that call - a wrong assumption to
+                                                    ;   avoid making). r4=0x12240484 (non-null) in
+                                                    ;   our run -> falls through, does NOT take
+                                                    ;   the 0x12037cac "build string table" branch.
+0x12037cac..0x12037da2: (NOT taken this run) resolves ~15 string-constant pointers via a
+    function ptr r4 (re-loaded fresh here, unrelated to the r4 above) and writes them into the
+    struct at P2+0x18c - looks like first-time JNI method name/signature string resolution.
+0x12037da4: str.w r8,[sp,#8]; add.w r8,sp,#0x128
+0x12037dac: asr.w sl, r6, #4      ; sl(r10) = LOOP BOUND, r6 computed by an obfuscated
+                                   ; size-rounding formula (0x12037c74-0x12037c9e: asrs/muls
+                                   ; pattern typical of a custom allocator's size-class rounding)
+                                   ; fed from a count loaded off the STACK at sp+0x20 via
+                                   ; `ldrd r5,r4,[sp,#0x20]` at 0x12037c64 - i.e. the TRUE
+                                   ; entry count comes from whatever wrote sp+0x20 BEFORE this
+                                   ; function was entered - not yet traced, needs a caller-of-
+                                   ; caller dump.
+0x12037db0: movs r6,#0            ; i = 0
+0x12037db2: cmp r6,sl; bge #0x12037dc8   ; loop while i < sl
+0x12037db6: mov r0,r4; movs r1,#0x10; mov r2,r8; bl #0x1203a314   ; decrypt entry[i] in place
+0x12037dc0: adds r4,#0x10; subs r5,#0x10; adds r6,#1; b #0x12037db2
+```
+
+**`0x1203a2c0`-`0x1203a3ae` (the per-entry XOR decrypt routine, called once per 0x10-byte entry):**
+```
+0x1203a314: push {r4,r5,r6,r7,lr}; add r7,sp,#0xc; str r8,[sp,#-4]!
+            ; args: r0=entry ptr (buffer+i*0x10), r1=0x10 (byte count), r2=key ptr (STACK addr,
+            ; same 0xe4fff528 every call - a shared key/nonce buffer set up once before the loop)
+0x1203a31c: cmp r1,#0; ble #0x1203a380      ; skip if count<=0
+0x1203a320: movs r3,#0
+loop @0x1203a322: cmp r3,r1; bge #0x1203a3aa
+  0x1203a326: ldrb r4,[r0,r3]; ldrb r5,[r2,#1]; eors r4,r5; strb r4,[r0,r3]   ; byte0 ^= key[1]
+  0x1203a32e: adds r4,r0,r3                                                  ; r4 = entry ptr
+  0x1203a334: ldrb r5,[r4,#2]; ldrb.w r8,[r4,#4]; ... eor with key[3]/key[5]/key[7]/key[9]/
+              key[0xa]/key[0xd]/key[0xf]/key[0x11] into entry bytes {2,4,6,8,9,0xb,0xd,0xf}
+  0x1203a36e: ldrb r5,[r4,#0xd]     <- THE EXACT FAULTING INSTRUCTION. r4 = entry ptr (buf+i*0x10).
+  0x1203a332: adds r3,#0x10; b #0x1203a322    ; (this routine only ever runs ONE 0x10-byte block
+                                               ; per call since r1=0x10 fixed - the OUTER loop in
+                                               ; the caller is what advances entry-to-entry)
+0x1203a380..0x1203a3a8: (else branch, not taken - some other size/hash finalization + a spin-wait
+    on `blx #0x1207b2d0` result, unrelated to our path)
+```
+
+### The actual data at the entries buffer (dumped live, `entry@0x...` prints before each decrypt)
+```
+0x12240484: 00000000000000000000000000000000   (index 0 - all zero)
+0x12240494: 00000000000000000000000000000000   (index 1 - all zero)
+0x122404a4: 00000000000000000000000000000000   (index 2 - all zero)
+0x122404b4: 00000000000000000000000000000000   (index 3 - all zero)
+0x122404c4: 00000000e8012012e801201202000000   (index 4 - contains 0x120112e8 TWICE - a real
+                                                 in-module pointer! - then 0x00000002)
+0x122404d4: fc010000f0ffffffffffffffffffffff   (index 5 - 0x000001fc then 0xfffffff0 x3 - looks
+                                                 like an "unused/end" sentinel pattern)
+```
+The loop keeps going past index 5 (confirmed via more `[3a36e]`/`[3a314]` hits at
+`0x122404e4`/`0x122404f4`, i.e. index 6/7) and crashes reading `address=0x12280001` — this is
+`~0x31b70` bytes / `0x10` = **~12,727 iterations** past the buffer start, i.e. `sl` is orders of
+magnitude larger than any plausible real method count for this class. **The loop bound (`sl`) is
+the bug**, not the branch choice, not our fixes.
+
+### Hypotheses for the root cause (not yet confirmed — session 17 starting point)
+1. The entries buffer (`0x12240484`) and/or the count feeding `sl` may depend on an earlier
+   ctor/init step that one of the session 13/14-era `CTOR-SKIP`/`CTOR-PATCH` hooks short-circuited
+   — same "uninitialized due to an earlier skip" pattern as every other blocker this session
+   (`P2+0x10`, `P2+0x24`, `FLAG_X`, etc). If so, the real fix is finding and populating whatever
+   that earlier step should have written (a real small count, e.g. matching the ~2 real-looking
+   entries at index 4), not skipping code here.
+2. Alternatively, the count could come from a legitimately-decrypted value elsewhere that just
+   hasn't been reached yet in the right order because of a fix ordering issue in this harness.
+
+### Recommended next steps (session 17)
+1. **Cheapest first (per methodology):** add a `CodeHook` at `0x12037dac` (`asr.w sl, r6, #4`)
+   that overrides `r10` immediately after with a small, safe value (e.g. `2`-`6`, matching the
+   apparent real entry at index 4) and see if the walk then proceeds cleanly past the decrypt
+   loop into the real `RegisterNatives` calls. Fast to try, doesn't require finding the true
+   root cause first.
+2. If that doesn't satisfy downstream checks (e.g. a checksum over the decrypted table that
+   expects the REAL count), trace back further: dump registers/stack at the ENTRY to this whole
+   enclosing function (before `0x12037c50`, i.e. wherever `r4`/`r6`/`sp+0x20` are first set up —
+   likely the caller of the function that itself calls `0x1201e378`/`0x12037c18`) to find where
+   the true count and entries-buffer pointer come from, and whether an earlier ctor-skip broke it.
+3. Once the decrypt loop completes without crashing, confirm the walk trace reaches
+   `0x120379d0`-`0x12037a80` (offset `0x35c` = JNINativeInterface index 215 = `RegisterNatives`)
+   for real this time — this has never actually been observed reached in ANY run this project,
+   despite being flagged as "the probable real call site" since session 15.
+4. Confirm `N.l`/`N.b2b` resolve (the `IllegalArgumentException: find method failed` that's
+   printed every run so far should finally stop). Then `N.b2b(ijiami.dat)` → DES key + portal
+   domain → plugin probe.
+
+### Do NOT (session 16 additions)
+- Don't reintroduce the "second fake object via a different GOT slot" theory for `sb`/r9 from
+  session15d/e — disproven this session; `sb` is our own `sa`, same singleton chain.
+- Don't confuse the `cbz r4` branch at `0x12037c5e` with anything our earlier fixes touch — `r4`
+  there is the entries-buffer pointer (preserved across `0x12037c18`'s call frame via its own
+  `push`/`pop {r4,...}`), not the fn ptr resolved inside that call. Taking the "decrypt" branch
+  (non-null buffer) is objectively correct; the bug is downstream in the loop bound.
+- Don't assume the crash is another null-pointer/vtable-chain bug like every prior blocker this
+  project — this one is a buffer-overrun-shaped bug (loop bound vs. real allocation size
+  mismatch), a genuinely different class of problem. Verify with live traces before patching.
+
+### Reproduce
+Same harness/script, unchanged interface — `_scratch/Unpack.java` + `_scratch/run_lever_remote.py`.
+All new session 16 diagnostics are gated on `jniPhase[0]` and capped (6-8 prints), consistent
+with the existing pattern. The crash is deterministic: `UC_ERR_READ_UNMAPPED, address=0x12280001,
+size=1, PC=0x1203a36e` every run, ~270ms in.
 
 ---
 

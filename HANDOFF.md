@@ -4,7 +4,32 @@ For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md),
 [SESSION-2026-07-29.md](SESSION-2026-07-29.md) first.
 
-## TL;DR (session 15e — 2026-07-29 ~19:55) — READ THIS FIRST
+## TL;DR (session 16 — 2026-07-29 ~20:50) — READ THIS FIRST
+
+**`0x12037c18` (session15d/e's blocker) genuinely cleared.** Session15d/e's "second fake object
+via a different GOT slot" theory was **wrong** — live register-dump hooks proved `sb`(r9)
+resolves to our own known `sa` GOT slot; there's only one singleton object (`P2`), same as every
+other blocker. The real bug: `P2+0x24` (never populated) held `0`, so the call chain's `that`
+pointer was `0`, so `*(0+0x38)` read `0` off the mapped null page, so `blx r4` jumped to `PC=0`.
+**Fix:** `P2+0x24` = self-ref `P2` (0x12086914), `P2+0x38` = `VTABLE_STUB|1` (0x12086928).
+Verified via walk trace: execution now reaches `0x120378a4`/`0x120378a6`, past `0x12037c18`.
+
+**New blocker — a different class of bug entirely:** a self-decrypting native-method table walk
+crashes with `UC_ERR_READ_UNMAPPED, address=0x12280001` at `PC=0x1203a36e`, inside a small
+per-entry XOR-decrypt routine (`0x1203a314`) called in a loop (`0x12037dac`-`0x12037dc6`) for a
+loop bound (`sl`/r10) that's ~12,700x larger than the real table (only ~2 plausible real entries
+found at the buffer base `0x12240484`). Not a null-pointer bug — a buffer-overrun-shaped bug
+(loop bound vs. real allocation size mismatch). Root cause (where the true count comes from) not
+yet traced. Full disasm (capstone ground truth) of both the decrypt routine and its caller loop
+is in NEXT-BLOCKER.md's session 16 section, along with a concrete first thing to try (force `sl`
+to a small safe value via a CodeHook at `0x12037dac`, cheapest-fix-first per this project's
+proven methodology).
+
+**Next:** try forcing `sl`/r10 small at `0x12037dac`; if that doesn't stick, trace back further
+(before `0x12037c50`) to find where the entries buffer + true count are set up. See
+NEXT-BLOCKER.md session 16 section for the exact plan.
+
+## TL;DR (session 15e — 2026-07-29 ~19:55)
 
 **BTV binaries extracted from .37. unidbg confirmed past 0x1203725c — new crash at 0x12043545.**
 

@@ -562,6 +562,150 @@ public class Unpack extends AbstractJni {
         addTrace(backend, jniPhase, 0x7f000800L, "VTABLE_STUB entry reached", -1);
         addTrace(backend, jniPhase, 0x1201e3b0L, "after blx r5 returned, r0", ArmConst.UC_ARM_REG_R0);
 
+        // --- Session 16: register-dump chain for 0x12037c18 (session 15d/15e blocker) ---
+        // Partial disasm (NEXT-BLOCKER.md session15d): sb(r9) = *(new GOT slot, NOT our known
+        // 0x12082340/P1/P2 chain); r0=*(sb); r1=*(r0+0x24); r0=*(r0+0x44) (call arg);
+        // r4=*(r1+0x38) (fn ptr); blx r4. Log every link live instead of hand-resolving literals.
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 6) return;
+                long sb = backend.reg_read(ArmConst.UC_ARM_REG_R9).longValue();
+                System.out.println(">>> [12037c18] at 0x12037c3a: sb(r9)=0x" + Long.toHexString(sb));
+                try {
+                    byte[] m = backend.mem_read(sb, 4);
+                    System.out.println(">>> [12037c18] *(sb) = 0x" + Long.toHexString(
+                            (m[0]&0xffL)|((m[1]&0xffL)<<8)|((m[2]&0xffL)<<16)|((m[3]&0xffL)<<24)));
+                } catch (Throwable t) {
+                    System.out.println(">>> [12037c18] *(sb) read failed: " + t);
+                }
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x12037c3aL, 0x12037c3aL, null);
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 6) return;
+                long r0 = backend.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                System.out.println(">>> [12037c18] at 0x12037c3e: r0(obj)=0x" + Long.toHexString(r0));
+                try {
+                    byte[] m = backend.mem_read(r0 + 0x24, 4);
+                    System.out.println(">>> [12037c18] *(obj+0x24) = 0x" + Long.toHexString(
+                            (m[0]&0xffL)|((m[1]&0xffL)<<8)|((m[2]&0xffL)<<16)|((m[3]&0xffL)<<24)));
+                } catch (Throwable t) {
+                    System.out.println(">>> [12037c18] *(obj+0x24) read failed: " + t);
+                }
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x12037c3eL, 0x12037c3eL, null);
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 6) return;
+                long r0 = backend.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                System.out.println(">>> [12037c18] at 0x12037c40: r0(obj)=0x" + Long.toHexString(r0)
+                        + " (about to deref +0x44 for call arg)");
+                try {
+                    byte[] m = backend.mem_read(r0 + 0x44, 4);
+                    System.out.println(">>> [12037c18] *(obj+0x44) = 0x" + Long.toHexString(
+                            (m[0]&0xffL)|((m[1]&0xffL)<<8)|((m[2]&0xffL)<<16)|((m[3]&0xffL)<<24)));
+                } catch (Throwable t) {
+                    System.out.println(">>> [12037c18] *(obj+0x44) read failed: " + t);
+                }
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x12037c40L, 0x12037c40L, null);
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 6) return;
+                long r1 = backend.reg_read(ArmConst.UC_ARM_REG_R1).longValue();
+                System.out.println(">>> [12037c18] at 0x12037c42: r1(that)=0x" + Long.toHexString(r1)
+                        + " (about to deref +0x38 for fn ptr)");
+                try {
+                    byte[] m = backend.mem_read(r1 + 0x38, 4);
+                    System.out.println(">>> [12037c18] *(that+0x38) = 0x" + Long.toHexString(
+                            (m[0]&0xffL)|((m[1]&0xffL)<<8)|((m[2]&0xffL)<<16)|((m[3]&0xffL)<<24)));
+                } catch (Throwable t) {
+                    System.out.println(">>> [12037c18] *(that+0x38) read failed: " + t);
+                }
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x12037c42L, 0x12037c42L, null);
+        addTrace(backend, jniPhase, 0x12037c4cL, "0x12037c18 fn ptr (r4) right before blx", ArmConst.UC_ARM_REG_R4);
+
+        // Session 16 cont: new crash past 0x12037c18 - UC_ERR_READ_UNMAPPED addr=0x12280001,
+        // PC=0x1203a314. Dump full register file at that PC (before it faults) to find which
+        // register holds the bad pointer/offset, live, instead of guessing from static bytes.
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 6) return;
+                long r0dump = backend.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                try {
+                    byte[] entry = backend.mem_read(r0dump, 0x10);
+                    StringBuilder eh = new StringBuilder();
+                    for (byte x : entry) eh.append(String.format("%02x", x & 0xff));
+                    System.out.println(">>> [3a314] entry@0x" + Long.toHexString(r0dump) + " bytes=" + eh);
+                } catch (Throwable t) {
+                    System.out.println(">>> [3a314] entry read failed: " + t);
+                }
+                StringBuilder sbh = new StringBuilder(">>> [3a314] regs:");
+                int[] regs = {ArmConst.UC_ARM_REG_R0, ArmConst.UC_ARM_REG_R1, ArmConst.UC_ARM_REG_R2,
+                        ArmConst.UC_ARM_REG_R3, ArmConst.UC_ARM_REG_R4, ArmConst.UC_ARM_REG_R5,
+                        ArmConst.UC_ARM_REG_R6, ArmConst.UC_ARM_REG_R7, ArmConst.UC_ARM_REG_R8,
+                        ArmConst.UC_ARM_REG_R9, ArmConst.UC_ARM_REG_R10, ArmConst.UC_ARM_REG_R11,
+                        ArmConst.UC_ARM_REG_R12, ArmConst.UC_ARM_REG_LR, ArmConst.UC_ARM_REG_SP};
+                String[] names = {"r0","r1","r2","r3","r4","r5","r6","r7","r8","sb(r9)","sl(r10)","fp(r11)","ip(r12)","lr","sp"};
+                for (int i = 0; i < regs.length; i++) {
+                    long v = backend.reg_read(regs[i]).longValue();
+                    sbh.append(' ').append(names[i]).append("=0x").append(Long.toHexString(v));
+                }
+                System.out.println(sbh);
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x1203a314L, 0x1203a314L, null);
+        // Also trace entry to the enclosing function (nearest hook we know, 0x1203a1d8) with LR
+        // this time, to see if this is a fresh call path (not the init_array ctor dispatch).
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 6) return;
+                long lr = backend.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                System.out.println(">>> [3a1d8-during-jni] hit while jniPhase, lr=0x" + Long.toHexString(lr));
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x1203a1d8L, 0x1203a1daL, null);
+        // Session 16 cont: exact faulting instruction is at 0x1203a36e (crash: byte read
+        // address=0x12280001). Dump full regs at the EXACT faulting PC to see which register
+        // holds/derives the bad address right before the read executes.
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 8) return;
+                StringBuilder sbh = new StringBuilder(">>> [3a36e] regs:");
+                int[] regs = {ArmConst.UC_ARM_REG_R0, ArmConst.UC_ARM_REG_R1, ArmConst.UC_ARM_REG_R2,
+                        ArmConst.UC_ARM_REG_R3, ArmConst.UC_ARM_REG_R4, ArmConst.UC_ARM_REG_R5,
+                        ArmConst.UC_ARM_REG_R6, ArmConst.UC_ARM_REG_R7, ArmConst.UC_ARM_REG_R8,
+                        ArmConst.UC_ARM_REG_R9, ArmConst.UC_ARM_REG_R10, ArmConst.UC_ARM_REG_R11,
+                        ArmConst.UC_ARM_REG_R12, ArmConst.UC_ARM_REG_LR, ArmConst.UC_ARM_REG_SP};
+                String[] names = {"r0","r1","r2","r3","r4","r5","r6","r7","r8","sb(r9)","sl(r10)","fp(r11)","ip(r12)","lr","sp"};
+                for (int i = 0; i < regs.length; i++) {
+                    long v = backend.reg_read(regs[i]).longValue();
+                    sbh.append(' ').append(names[i]).append("=0x").append(Long.toHexString(v));
+                }
+                System.out.println(sbh);
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x1203a36eL, 0x1203a36eL, null);
+
         // Wide execution trace: log every DISTINCT address actually executed across the whole
         // span from our vtable fix to the kill() block, in visit order. This reconstructs the
         // real path in one run instead of bisecting address-by-address across many round trips.
@@ -578,6 +722,23 @@ public class Unpack extends AbstractJni {
                 public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
                 public void detach() {}
             }, 0x120370e0L, 0x12037b90L, null);
+        }
+        // Session 16: second wide walk trace covering the region PAST 0x12037c18 (which we just
+        // cleared) through to the new crash site at 0x1203a314, to see the real path taken
+        // instead of guessing.
+        {
+            final LinkedHashSet<Long> seen2 = new LinkedHashSet<>();
+            final int[] printed2 = {0};
+            backend.hook_add_new(new CodeHook() {
+                public void hook(Backend b, long address, int size, Object user) {
+                    if (!jniPhase[0]) return;
+                    if (seen2.add(address) && printed2[0]++ < 400) {
+                        System.out.println(">>> [walk2] 0x" + Long.toHexString(address));
+                    }
+                }
+                public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                public void detach() {}
+            }, 0x12037c18L, 0x1203a400L, null);
         }
 
         System.out.println(">>> loading libexec.so ...");
@@ -810,6 +971,34 @@ public class Unpack extends AbstractJni {
                     System.out.println(">>> P2+0x" + Long.toHexString(off) + " pre-write FAILED: " + t);
                 }
             }
+            // Session 16: `bl 0x12037c18` fully traced live (register-dump hooks at each link).
+            // sb(r9) resolved to 0x120868e0 = OUR OWN `sa` - i.e. the "different GOT slot" from
+            // session 15d/15e was a false lead; it's the SAME known chain. *(sb)=P2 (0x120868f0),
+            // confirmed identical object, not a second one. The real bug: `obj+0x24` (P2+0x24,
+            // 0x12086914) was never populated by us - held 0 (this object's memory starts as
+            // legit zero, not garbage, since nothing here happens to write it) - so "that"=0,
+            // then `*(that+0x38)` = `*(0x38)` reads 0 off the mapped null page -> fn ptr=0 ->
+            // `blx r4` jumps to PC=0x0 -> UC_ERR_FETCH_PROT. This exactly matches the crash
+            // (`PC=0x0, LR=0x12037c4f`) reported at the top of session 16's blocker.
+            // Fix: P2+0x24 -> P2 (self-ref, same trick as P2+0x10), P2+0x38 -> VTABLE_STUB.
+            // (P2+0x44, the call ARG, stays 0 - VTABLE_STUB's `movs r0,#1; bx lr` ignores args.)
+            final long P2_SLOT_24 = P2 + 0x24; // 0x12086914
+            final long P2_SLOT_38 = P2 + 0x38; // 0x12086928
+            try {
+                backend.mem_write(P2_SLOT_24, new byte[]{
+                        (byte) (P2 & 0xff), (byte) ((P2 >> 8) & 0xff),
+                        (byte) ((P2 >> 16) & 0xff), (byte) ((P2 >> 24) & 0xff)
+                });
+                backend.mem_write(P2_SLOT_38, new byte[]{
+                        (byte) (VTABLE_STUB | 1L), (byte) ((VTABLE_STUB >> 8) & 0xff),
+                        (byte) ((VTABLE_STUB >> 16) & 0xff), (byte) ((VTABLE_STUB >> 24) & 0xff)
+                });
+                System.out.println(">>> P2_SLOT_24 @0x" + Long.toHexString(P2_SLOT_24)
+                        + " -> self-ptr P2 (0x" + Long.toHexString(P2) + ")");
+                System.out.println(">>> P2_SLOT_38 @0x" + Long.toHexString(P2_SLOT_38) + " -> VTABLE_STUB");
+            } catch (Throwable t) {
+                System.out.println(">>> P2_SLOT_24/38 pre-write FAILED: " + t);
+            }
             // Safety net: re-assert EXEC on SCRATCH right before the call. Session 15d saw a
             // `blx r5` to the SAME VTABLE_STUB address that a prior `blx r1` (0x120370c6, same
             // run) executed successfully, fail with FETCH_PROT the second time - re-mapping to
@@ -840,7 +1029,7 @@ public class Unpack extends AbstractJni {
             // Post-call decrypted-code dumps for offline capstone disasm (ctors have run by now).
             for (long[] range : new long[][]{{0x12037090L, 0x60}, {0x12037b40L, 0xa0}, {0x12037a80L, 0x60},
                     {0x12037860L, 0x60}, {0x120379d0L, 0xb0}, {0x120370e0L, 0x80},
-                    {0x1201e378L, 0x180}, {0x12037c18L, 0x40}}) {
+                    {0x1201e378L, 0x180}, {0x12037c18L, 0x60}, {0x1203a2c0L, 0x140}, {0x12037c50L, 0x180}}) {
                 try {
                     long ea = range[0];
                     int len = (int) range[1];
