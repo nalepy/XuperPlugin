@@ -1556,6 +1556,15 @@ public class Unpack extends AbstractJni {
                     for (int i = 0x200; i < 0x300 && i < pageBytes.length; i++)
                         win.append(String.format("%02x", pageBytes[i] & 0xff));
                     System.out.println(">>> PAGE@0x12038000 window[0x200:0x300]: " + win);
+                    // Session 23 part 9: dispatch #3's LR (0x12038273) confirms it's the now-fixed
+                    // double-indirection call site returning normally. Tracing forward from there:
+                    // ...bl 0x1203a7d4; cmp r0,#0; beq 0x120381ea -- a conditional branch BACK to
+                    // 0x120381ea, right next to the 0x120381c1 crash site. Need that earlier region
+                    // (below our 0x200 window start) to see what's actually there.
+                    StringBuilder win2 = new StringBuilder();
+                    for (int i = 0x180; i < 0x200 && i < pageBytes.length; i++)
+                        win2.append(String.format("%02x", pageBytes[i] & 0xff));
+                    System.out.println(">>> PAGE@0x12038000 window[0x180:0x200]: " + win2);
                 } catch (Throwable t) {
                     System.out.println(">>> PAGE@0x12038000 pre-protect failed: " + t);
                 }
