@@ -1,6 +1,20 @@
-# Next Blocker — ALL real JNI dispatch ruled out at once; "vtable calls" this session were our own fake struct, not unidbg's real env
+# Next Blocker — [CORRECTED] part 14's "no JNI dispatch" conclusion was WRONG; JNI trigger NOT ruled out
 
-## Update (session 23 part 14) — zero real JNI calls happen at all; structural finding, not just another eliminated guess
+## CORRECTION (session 23 part 15 audit) — parts 13-14 over-claimed; retract the "JNI ruled out" conclusion
+
+An audit of parts 13-14 against the actual `output.log` found the headline conclusion is **false**:
+
+- Part 14 claimed "zero real JNI calls happen at all before the crash." But the same run's log shows **FindClass being called** at lines 409-413 (`r2=0xfffe00b0`, the real FindClass SVC stub, invoked via `blx r2`) during JNI_OnLoad init.
+- The reason the part-14 hooks showed zero hits: they were **installed at line 682, after the init-phase JNI activity at lines 402-413 had already happened**. The hooks only covered the window from just-before-N.l (line 738) onward. "Zero hits" means "no JNI env call during N.l's window," NOT "no JNI dispatch at all."
+- Compounding flaw: **no positive control was ever run.** A single-address `CodeHook` was placed at each SVC stub *base* (e.g. FindClass at `0xfffe00b0`), but this session's own earlier note (`_scratch/Unpack.java:819`) records the FindClass interrupt firing at `0xfffe00b4` (base **+4**). It was never confirmed that a CodeHook at the stub base fires at all when the function is called — so even "no JNI during N.l" is not safely established.
+
+**What is actually still true:** parts 13-14 did NOT rule out a JNI-triggered mprotect. That whole branch is back open. The `vm.getJNIEnv()` address-resolution technique is still valid and useful; the *conclusions drawn from the zero-hit result* are retracted.
+
+**Corrected next step for the JNI angle:** re-run the SVC hooks but (a) install them BEFORE JNI_OnLoad / the init phase, not before N.l, so they cover the whole run; (b) add a positive control — confirm the FindClass hook actually fires on the known init-phase call at line 409 before trusting any zero-hit result; (c) hook a small range around each stub (base .. base+8) or use an InterruptHook keyed on SVC, not a single-address CodeHook, to avoid the +0/+4 miss.
+
+---
+
+## (RETRACTED — see correction above) Update (session 23 part 14) — zero real JNI calls happen at all; structural finding, not just another eliminated guess
 
 Extended part 13's technique to 8 JNI env functions at once (`FindClass`, `GetObjectClass`, `IsInstanceOf`, `GetMethodID`, `NewObject`, `CallObjectMethodV`, `CallBooleanMethodV`, `CallVoidMethodV`), each hooked at its real runtime SVC address via `vm.getJNIEnv()` (same ground-truth method as part 13, offsets from unidbg-android's `DalvikVM.java`, fetched from GitHub). All 8 installed cleanly with real resolved addresses (`0xfffe00b0` through `0xfffe0430`).
 
@@ -136,7 +150,7 @@ python _scratch/run_lever_remote2.py
 - FETCH LIMIT being too low (bisected 50→300→1500, always dies at cap+1 back when this was still the active bug — since fixed)
 - On-demand mapping churn corrupting `0x12038000` (canary reads + forced re-protect never failed)
 - A guest-code `mprotect`-numbered SVC anywhere in the ~10 traced functions (exhaustive disasm sweep, zero hits)
-- **Any real JNI env function call at all** — `NewObjectV`, `FindClass`, `GetObjectClass`, `IsInstanceOf`, `GetMethodID`, `NewObject`, `CallObjectMethodV`, `CallBooleanMethodV`, `CallVoidMethodV` — all hooked at their real ground-truth SVC addresses via `vm.getJNIEnv()`, zero hits on any of them, entire run. **This closes the whole "it's a JNI call doing this" branch, not just one function.** The "JNI-vtable-shaped" indirect calls found in earlier disasm rounds go through our own fake `SINGLETON` struct, not unidbg's real `JNIEnv` — a structural finding, not a per-function guess.
+- ~~Any real JNI env function call~~ **[RETRACTED — see correction at top]** The "zero JNI hits" result was an artifact: hooks were installed after the init-phase JNI activity (FindClass fires at output.log:409, hooks installed at :682), and no positive control confirmed the hooks fire at all. The JNI-triggered-mprotect branch is NOT ruled out. (What IS still supported: the SINGLETON-based indirect calls at `0x7f002000` are our own fake struct — but that does not mean real JNIEnv is never used; FindClass through the real env at `0xfffe00b0` demonstrably happens during init.)
 
 **Promising directions for a fresh session:**
 1. **`AndroidElfLoader.java`'s `mem_protect` call, tied to ELF `PT_LOAD` segment processing** — found during the source search but not yet investigated. If anything triggers a second library-load/relocation pass (even implicitly, inside unidbg's own bookkeeping) that overlaps our page in address space, this is the mechanism that would silently reprotect it. Worth checking whether `dlopen`/`System.loadLibrary`-equivalent ever fires a second time this session.
