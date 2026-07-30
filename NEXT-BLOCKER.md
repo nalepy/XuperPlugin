@@ -1,5 +1,67 @@
 # Next Blocker — XuperPlugin portalCore
 
+## Status (2026-07-29 session 18 — root cause of the null className fully traced to an unexplored parser function returning failure)
+
+**Traced the null-className bug one level deeper than session 17 left it.** The malloc'd
+method-table buffer (`P2+0x18c`) stays empty because the call that's supposed to populate it
+(`bl 0x12026d74`, called from `0x12037e10` with `r0`=entries-buffer, `r1`=a format/template
+string pointer, `r2`=a stack output buffer) **returns 0 (failure)**, even after fixing its
+upstream inputs. `0x12026d74` itself has never been disassembled — that's the session 19
+starting point.
+
+**Fixes applied this session, both confirmed working via live traces:**
+1. **The real root cause from session17** (by-reference output args at the P2+0x24/+0x38 call
+   site, `0x12037c46-4c`: `r2=&sp[0x24]`, `r3=&sp[0x20]` — our `VTABLE_STUB` never writes to
+   them, leaving garbage) is now understood precisely, but a `CodeHook` placed directly on that
+   call site (`0x12037c46`-`0x12037c4c`) **mysteriously never fires**, despite the code
+   demonstrably executing (a `malloc()` call 4 bytes later, at `0x12037c52`, clearly runs — its
+   result lands in `P2+0x18c` as expected). Root cause of the non-firing hook not resolved; worked
+   around by hooking the *read* point instead (`0x12037c68`, right after `ldrd r5,r4,[sp,#0x20]`
+   at `0x12037c64` — confirmed reached) and overriding `r5`/`r4` directly to `2` there.
+2. Fixed a **self-inflicted diagnostic timing bug**: an earlier register-dump hook at `0x12037e0a`
+   was reading `r0`/`r1`/`r2` *before* the three `mov` instructions that actually set them up for
+   the `bl 0x12026d74` call executed — showing stale garbage and wasting real debugging time
+   chasing a phantom lead. Moved the hook to `0x12037e10` (the `bl` itself, after all three
+   `mov`s complete) — args are now confirmed **fully legitimate**: `r0=0x12240484` (the entries
+   buffer base), `r1=0x1208ccf0` (a real in-module pointer, presumably a format string), `r2` a
+   valid stack address. **Lesson for future sessions: when register-dump values look like garbage
+   right after a fix, check hook TIMING (which side of the `mov`/setup instructions it's on)
+   before concluding the fix itself is wrong.**
+
+Despite fully legitimate-looking arguments, `0x12026d74` still returns `0`. This function has
+never been disassembled in this project — it's a good candidate for a real utility/parser
+function (its low address, far from the `0x1203xxxx` cluster everything else lives in, suggests
+a shared helper rather than more obfuscated anti-tamper logic).
+
+Full log: [`SESSION-2026-07-29.md`](SESSION-2026-07-29.md) ("Session 18" section). Handoff:
+[`HANDOFF.md`](HANDOFF.md).
+
+### Next steps (ordered) — session 19
+1. Disassemble `0x12026d74` (same technique as always: dump post-decryption runtime bytes via a
+   wider entry in the `DECRYPTED@0x...` dump loop, then capstone over SSH on `.40`) to find why
+   it returns 0 given seemingly-valid `r0`/`r1`/`r2`.
+2. Register-dump hooks inside `0x12026d74` itself once disassembled, to catch the actual failure
+   condition live (comparisons, early-return branches) rather than guessing from outside.
+3. Consider whether the `r1` "format string" argument needs to be something SPECIFIC (not just
+   any non-null in-module pointer) — it's resolved via a PC-relative literal at `0x12037dec`-ish
+   that was never independently verified to contain a sensible string; dump and print it as a
+   C-string to check.
+4. Once `0x12026d74` succeeds and the method table gets real name/sig/fnPtr data, confirm
+   `FindClass` finally gets a real className, and that `RegisterNatives` fires
+   (`0x120379d0`-`0x12037a80`, offset `0x35c`) — still never observed reached in this project.
+5. `N.b2b(ijiami.dat)` → decrypted DEX → `scripts/analyze_decrypted_dex.py` (already built and
+   tested) → DES key + portal domain → plugin probe.
+
+### Do NOT (session 18 additions)
+- Don't assume a `CodeHook` that fails to fire means the address isn't executed — verify via an
+  independent side effect first (like we did with the `malloc()` result landing in `P2+0x18c`)
+  before concluding the code path is different than expected.
+- Don't trust register-dump values without checking hook placement is AFTER whatever `mov`/setup
+  instructions the disasm shows leading into the call — a hook one instruction too early reads
+  stale registers and looks exactly like a "everything's garbage" finding.
+
+---
+
 ## Status (2026-07-29 session 17 — decrypt-loop bypassed; REACHED REAL `FindClass` for the first time; null className pinpointed to an unpopulated malloc'd method-table field)
 
 **Biggest milestone yet: execution now reaches unidbg's REAL, built-in `FindClass` JNI implementation** (`DalvikVM$3`, via a genuine interrupt-based call trampoline at `PC=unidbg@0xfffe00b4`) — the first time ANY run in this project has gotten past all the fake-vtable-object anti-tamper gates into actual DVM/JNI bridge activity.

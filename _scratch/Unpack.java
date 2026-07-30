@@ -189,6 +189,34 @@ public class Unpack extends AbstractJni {
         }, addr, addr, null);
     }
 
+    // Like addTrace but dumps multiple named registers at once (session 18 transform-chain trace).
+    private static void addRegDump(final Backend backend, final boolean[] jniPhase, long addr,
+                                    final String label, final int[] regConsts) {
+        final int[] n = new int[1];
+        final String[] regNames = new String[regConsts.length];
+        for (int i = 0; i < regConsts.length; i++) {
+            regNames[i] = regConsts[i] == ArmConst.UC_ARM_REG_R0 ? "r0"
+                    : regConsts[i] == ArmConst.UC_ARM_REG_R1 ? "r1"
+                    : regConsts[i] == ArmConst.UC_ARM_REG_R2 ? "r2"
+                    : regConsts[i] == ArmConst.UC_ARM_REG_R4 ? "r4"
+                    : ("reg" + i);
+        }
+        backend.hook_add_new(new CodeHook() {
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0]) return;
+                if (n[0]++ >= 6) return;
+                StringBuilder sbh = new StringBuilder(">>> [18] " + label + ":");
+                for (int i = 0; i < regConsts.length; i++) {
+                    long v = backend.reg_read(regConsts[i]).longValue();
+                    sbh.append(' ').append(regNames[i]).append("=0x").append(Long.toHexString(v));
+                }
+                System.out.println(sbh);
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, addr, addr, null);
+    }
+
     public Unpack() throws Exception {
         AndroidEmulator emulator = AndroidEmulatorBuilder.for32Bit()
                 .setProcessName("com.android.mgstv")
@@ -780,6 +808,98 @@ public class Unpack extends AbstractJni {
             public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
             public void detach() {}
         }, 0x120378aaL, 0x120378b2L, null);
+
+        // Session 18: trace the transform chain between the decrypt loop exit and the FindClass
+        // call, per NEXT-BLOCKER.md session17's next-steps plan. Register dumps at each of the
+        // 4 unexplored call sites (0x12026d74, 0x1203f9b0, both 0x1207b630 calls, both/all
+        // 0x1207b400 calls) to see which is supposed to populate *(P2+0x18c+4) and why it isn't.
+        // FIXED (was mistimed): hooking 0x12037e0a fires BEFORE `mov r0,r5;mov r1,fp;mov r2,sl`
+        // execute, so it read stale registers, not the real args. Hook 0x12037e10 (the `bl`
+        // itself) instead - fires after all 3 movs have run.
+        addRegDump(backend, jniPhase, 0x12037e10L, "before bl 0x12026d74 (r0=r5,r1=fp,r2=sl)",
+                new int[]{ArmConst.UC_ARM_REG_R0, ArmConst.UC_ARM_REG_R1, ArmConst.UC_ARM_REG_R2});
+        addRegDump(backend, jniPhase, 0x12037e14L, "after bl 0x12026d74 returned",
+                new int[]{ArmConst.UC_ARM_REG_R0});
+        addRegDump(backend, jniPhase, 0x12037e1cL, "before bl 0x1203f9b0 (r4=prev result)",
+                new int[]{ArmConst.UC_ARM_REG_R4});
+        addRegDump(backend, jniPhase, 0x12037e20L, "after bl 0x1203f9b0, byte at [r4]",
+                new int[]{ArmConst.UC_ARM_REG_R0, ArmConst.UC_ARM_REG_R4});
+        addRegDump(backend, jniPhase, 0x12037e2cL, "before 1st blx 0x1207b630 (r0=r4,r1=r8)",
+                new int[]{ArmConst.UC_ARM_REG_R0, ArmConst.UC_ARM_REG_R1});
+        addRegDump(backend, jniPhase, 0x12037e30L, "after 1st blx 0x1207b630",
+                new int[]{ArmConst.UC_ARM_REG_R0});
+        addRegDump(backend, jniPhase, 0x12037e3cL, "before 2nd blx 0x1207b630 (r0=0,r1=r8)",
+                new int[]{ArmConst.UC_ARM_REG_R0, ArmConst.UC_ARM_REG_R1});
+        addRegDump(backend, jniPhase, 0x12037e40L, "after 2nd blx 0x1207b630",
+                new int[]{ArmConst.UC_ARM_REG_R0});
+        addRegDump(backend, jniPhase, 0x12037e46L, "before 1st blx 0x1207b400 (r0=r4,r1=[sp+0x18])",
+                new int[]{ArmConst.UC_ARM_REG_R0, ArmConst.UC_ARM_REG_R1});
+        addRegDump(backend, jniPhase, 0x12037e4aL, "after 1st blx 0x1207b400",
+                new int[]{ArmConst.UC_ARM_REG_R0});
+
+        // ROOT CAUSE FOUND (session 18): the call at 0x12037c4c that we fixed with P2+0x24/+0x38
+        // (VTABLE_STUB) isn't just a boolean gate - ground-truth disasm shows its call site sets
+        // up TWO BY-REFERENCE OUTPUT ARGS right before the call:
+        //   0x12037c46: add r2,sp,#0x24   ; r2 = &sp[0x24]  (out param)
+        //   0x12037c48: add r3,sp,#0x20   ; r3 = &sp[0x20]  (out param)
+        //   0x12037c4c: blx r4            ; our stub - does nothing to *r2/*r3!
+        // The real function is meant to WRITE a real entry-count/size into those two stack
+        // slots. Our stub only returns r0=1 and touches nothing else, so sp[0x20]/sp[0x24] stay
+        // as whatever garbage was already on the stack (confirmed: r5 loaded from there later
+        // was 0xffffffff). This is exactly why the `sl`/`r5` bound we hand-forced to 6 never
+        // matched the REAL semantic count the transform chain needed downstream (it just needed
+        // "doesn't crash the XOR loop", not "is the true count"). Fix: write real values
+        // directly into *(sp+0x20) and *(sp+0x24) at the call site, before the stub runs -
+        // using 2, matching the one real-looking pointer-bearing entry (index 4, which itself
+        // contained a literal 0x00000002 right after its real pointer field).
+        // NOTE: a CodeHook at 0x12037c46-0x12037c4c (the call site itself, before the stub call)
+        // mysteriously never fires despite the code demonstrably executing (malloc at 0x12037c52
+        // right after DOES run, confirmed via P2+0x18c getting a real pointer). Root cause of
+        // that specific non-firing not resolved - possibly a translation-block/hook-registration
+        // quirk specific to this address in this unidbg version. Worked around by hooking the
+        // READ point instead (0x12037c64's `ldrd r5,r4,[sp,#0x20]`, confirmed reached - its
+        // effects are visible in later diagnostics) and overriding the REGISTERS directly right
+        // after the load, rather than the memory before it.
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0]) return;
+                long r5before = backend.reg_read(ArmConst.UC_ARM_REG_R5).longValue();
+                long r4before = backend.reg_read(ArmConst.UC_ARM_REG_R4).longValue();
+                backend.reg_write(ArmConst.UC_ARM_REG_R5, 2L);
+                backend.reg_write(ArmConst.UC_ARM_REG_R4, 2L);
+                if (n++ < 4) {
+                    System.out.println(">>> [18] post-ldrd override: r5 was 0x" + Long.toHexString(r5before)
+                            + " r4 was 0x" + Long.toHexString(r4before) + " -> both forced to 2 (real count)");
+                }
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x12037c68L, 0x12037c68L, null);
+
+        // Also: full 0x3c-byte dump of the malloc'd method-table buffer right before FindClass,
+        // to see whether ANY of it got populated or the whole thing is still zero.
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 4) return;
+                try {
+                    byte[] tbl = backend.mem_read(0x120868f0L + 0x18cL, 4); // P2+0x18c (P2 not yet in scope here)
+                    long tblPtr = (tbl[0]&0xffL)|((tbl[1]&0xffL)<<8)|((tbl[2]&0xffL)<<16)|((tbl[3]&0xffL)<<24);
+                    System.out.println(">>> [18] *(P2+0x18c) table ptr = 0x" + Long.toHexString(tblPtr));
+                    if (tblPtr != 0) {
+                        byte[] full = backend.mem_read(tblPtr, 0x3c);
+                        StringBuilder sbh = new StringBuilder();
+                        for (byte x : full) sbh.append(String.format("%02x", x & 0xff));
+                        System.out.println(">>> [18] method-table[0x3c] @0x" + Long.toHexString(tblPtr) + ": " + sbh);
+                    }
+                } catch (Throwable t) {
+                    System.out.println(">>> [18] method-table dump failed: " + t);
+                }
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x120378aaL, 0x120378aaL, null);
 
         // Wide execution trace: log every DISTINCT address actually executed across the whole
         // span from our vtable fix to the kill() block, in visit order. This reconstructs the

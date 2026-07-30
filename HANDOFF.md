@@ -4,7 +4,32 @@ For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md),
 [SESSION-2026-07-29.md](SESSION-2026-07-29.md) first.
 
-## TL;DR (session 17 — 2026-07-29 ~21:00) — READ THIS FIRST
+## TL;DR (session 18 — 2026-07-29 ~21:20) — READ THIS FIRST
+
+**Traced session 17's null-`className` bug one level deeper: it's blocked on an unexplored
+parser/utility function, `0x12026d74`, that returns 0 (failure) even with fully legitimate args.**
+
+Fixed the actual root cause behind the malloc'd method-table staying empty — the `P2+0x24/+0x38`
+call site (`0x12037c46-4c`) passes two by-reference output-arg pointers (`r2=&sp[0x24]`,
+`r3=&sp[0x20]`) that our `VTABLE_STUB` never writes to. A `CodeHook` placed directly there
+mysteriously never fires (unresolved oddity — worked around by hooking the later read point,
+`0x12037c68`, and overriding `r5`/`r4` to `2` there instead, which is confirmed effective).
+
+**Also fixed a self-inflicted diagnostic bug that cost real debugging time:** a register-dump
+hook was reading `r0`/`r1`/`r2` one instruction too early (before the `mov`s that set them up for
+a call), showing garbage that looked exactly like a real bug. Moved it to the right spot — args
+are now confirmed legitimate (`r0`=entries buffer, `r1`=a real in-module string pointer,
+`r2`=valid stack address) — yet the call still fails. **General lesson recorded for future
+sessions:** when a register dump looks like garbage right after a fix, check hook timing before
+concluding the fix is wrong.
+
+**Next:** disassemble `0x12026d74` (untouched territory, low address suggests a real shared
+utility, not more obfuscation) to find why it fails with clean-looking inputs. Full plan in
+NEXT-BLOCKER.md's session 18 section.
+
+**Also running:** a second `.37` root/alt-access attempt (background agent) — status pending.
+
+## TL;DR (session 17 — 2026-07-29 ~21:00)
 
 **Biggest milestone yet: reached unidbg's REAL `FindClass` implementation** (`DalvikVM$3`) for
 the first time in this whole project — past every fake-vtable/anti-tamper gate, into actual
