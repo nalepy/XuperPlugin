@@ -1569,6 +1569,21 @@ public class Unpack extends AbstractJni {
                     System.out.println(">>> PAGE@0x12038000 pre-protect failed: " + t);
                 }
 
+                // Session 23 part 10: dump the 3 remaining unexplored call targets from the
+                // 0x120381c0 function body (bl 0x1203b520, bl 0x1203a760, bl 0x1203a7d4) so
+                // they can be disassembled offline in parallel — any of the three could be
+                // the actual mprotect/self-nuke trigger session 18/21 partially patched.
+                for (long fnAddr : new long[]{0x1203b520L, 0x1203a760L, 0x1203a7d4L}) {
+                    try {
+                        byte[] fnBytes = backend.mem_read(fnAddr, 0x300);
+                        StringBuilder fsb = new StringBuilder();
+                        for (byte x : fnBytes) fsb.append(String.format("%02x", x & 0xff));
+                        System.out.println(">>> FN@0x" + Long.toHexString(fnAddr) + " window[0:0x300]: " + fsb);
+                    } catch (Throwable t) {
+                        System.out.println(">>> FN@0x" + Long.toHexString(fnAddr) + " dump FAILED: " + t);
+                    }
+                }
+
                 // Dump bytes around 0x12038270 — critical site where walk2 reaches but safety
                 // hook doesn't fire (meaning r0 != 0 there). Disassemble to understand why.
                 try {
