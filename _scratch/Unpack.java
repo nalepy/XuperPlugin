@@ -1496,6 +1496,15 @@ public class Unpack extends AbstractJni {
                             System.out.println(">>> [SINGLETON2 dispatch #" + n + "] called from LR=0x"
                                     + Long.toHexString(lr));
                         }
+                        // Session 23 part 8: the raw UC_HOOK_MEM_FETCH_PROT hook (reflection)
+                        // proved unreliable (perturbed the crash instead of fixing it). Piggyback
+                        // a plain, already-safe mem_protect nudge on this hook instead — it's a
+                        // real, frequently-firing checkpoint in the execution timeline, cheap to
+                        // re-assert RWX on 0x12038000 every time we pass through it.
+                        try {
+                            b.mem_protect(0x12038000L, 0x2000,
+                                UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                        } catch (Throwable t) { /* best-effort */ }
                     }
                     public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
                     public void detach() {}
@@ -1832,8 +1841,21 @@ public class Unpack extends AbstractJni {
                 System.out.println(">>> Backend proxy DISABLED (pre-protecting via static mem_protect)");
                 // Still need realBackendRef for the raw unicorn hooks check below
                 final Backend[] realBackendRef = new Backend[]{emulator.getBackend()};
-                // Completely disable raw unicorn hooks — they use reflection which can corrupt internals
+                // Session 23 part 8: split the old blanket ENABLE_RAW_HOOKS flag into three.
+                // UNMAPPED is already covered safely by our own EventMemHook (mask 112, no
+                // reflection) — leave that one off to avoid double-handling/corruption risk.
+                // We now genuinely hit UC_ERR_FETCH_PROT (part 7's fix got us here cleanly),
+                // and this FETCH_PROT hook is the one built specifically for that — try it.
                 final boolean ENABLE_RAW_HOOKS = false;
+                // Session 23 part 8: tried it — fired once for a spurious unrelated address
+                // (0x0, garbage PC) and the real 0x120381c1 fault still happened right after,
+                // just with a DIFFERENT error type (UC_ERR_MAP instead of FETCH_PROT) than the
+                // unpatched run. Same address, different error across otherwise-identical runs
+                // = the reflection-based hook perturbing state, matching the original warning
+                // this was disabled for. Reverted; use the plain mem_protect nudge inside the
+                // already-trusted SINGLETON2 dispatch hook instead (see below).
+                final boolean ENABLE_FETCH_PROT_HOOK = false;
+                final boolean ENABLE_WRITE_PROT_HOOK = false;
 
                 // Session 21 Plan F: register UC_HOOK_MEM_FETCH_PROT directly on the raw Unicorn
                 // native handle. The EventMemHook API (type mask 64) only handles UNMAPPED fetches,
@@ -1841,7 +1863,7 @@ public class Unpack extends AbstractJni {
                 // which bypasses Backend entirely, so neither the backend proxy nor EventMemHook
                 // can catch it. A UC_HOOK_MEM_FETCH_PROT fires at the native level when the fetch
                 // fails due to protection; we re-protect on the spot and return true to retry.
-                if (ENABLE_RAW_HOOKS && realBackendRef[0] != null) {
+                if (ENABLE_FETCH_PROT_HOOK && realBackendRef[0] != null) {
                     try {
                         // Access the unicorn field from Unicorn2Backend
                         Class<?> backendClass = realBackendRef[0].getClass();
@@ -1917,7 +1939,7 @@ public class Unpack extends AbstractJni {
                 // because it tries to write to a page that had its write permission removed by the
                 // host-side mprotect (which bypasses the Backend proxy). Re-enable write on the
                 // target page and retry.
-                if (ENABLE_RAW_HOOKS && realBackendRef[0] != null) {
+                if (ENABLE_WRITE_PROT_HOOK && realBackendRef[0] != null) {
                     try {
                         Class<?> backendClass = realBackendRef[0].getClass();
                         Field unicornField = null;

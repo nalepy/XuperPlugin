@@ -1,43 +1,40 @@
-# Next Blocker — 0xe1... free-run FIXED; back to session 21's original 0x120381c1 EXEC-protection loss
+# Next Blocker — 0x12038000 loses EXEC between the 3rd SINGLETON2 dispatch and 0x120381c1
 
-## Status (2026-07-30 session 23, part 7) — real fix landed
+## Session 23 summary (2026-07-30) — real fixes landed, current state below
 
-Patched the actual bug behind the `0xe1...` free-run (traced via offline capstone disassembly, no remote round-trip needed to find it). **It's fixed**: the free-run no longer happens, and `SINGLETON2 dispatch count` advanced again (2→3, a new all-time high). Execution now fails later, on a cleaner, more specific error — session 21's original `0x120381c1` EXEC-permission problem, now unmasked instead of being buried under the free-run crash.
+This was a long session (7+ parts, ~14 remote runs). Net result: **two real bugs found and fixed**, N.l now runs measurably further than at session start, and the current blocker is well-characterized even though not yet resolved. Quick timeline:
 
-## The bug and the fix
+1. **Falsified**: blanket SINGLETON stub blocking real subroutines (it wasn't — 0 dispatches, execution never got that far yet).
+2. **Falsified**: `b2b` as an independent decrypt path (it's gated by the same init state as `l()`).
+3. **Falsified**: FETCH LIMIT cap being "too low" (bisected 50→300→1500, always dies at cap+1 — the thing consuming it was genuinely unbounded, not close to finishing).
+4. **Found root cause #1 (FIXED)**: `0x7b290` — a ctor-skipped pointer table's stale on-disk default, read and branched to, landing PC in auto-mapped zero memory where it free-ran forever. Fixed by bouncing PC back to LR on every hit (not just once) — turned out to be a real, bounded ~10-entry table walk once given the chance to advance entry-to-entry.
+5. **Result of fix #1**: SINGLETON2 dispatch count went from 0 (all session) to 2 — first real evidence N.l reaches and uses the fake vtable.
+6. **Found root cause #2 (FIXED)**: `0xe1...` — same bug class as #1, traced via offline capstone disassembly (`_scratch/disasm_38273.py`) to `SINGLETON+0x1a4` holding our blanket-fill default (`0x7f003000`) but being **double-dereferenced** by the caller (reads SINGLETON2's raw `BX LR` opcode bytes as a data pointer instead of executing them). Fixed with a pointer-cell at `SINGLETON2+0x100` holding the value `0x7f003000`, so the double dereference resolves correctly.
+7. **Result of fix #2**: free-run gone entirely, SINGLETON2 dispatch count climbed to 3 — new all-time high. Execution now fails on a **different, cleaner** error.
 
-Disassembled the live runtime bytes at `0x12038200-0x12038300` (pulled via one dump, `_scratch/disasm_38273.py`, decoded offline — no extra remote run needed). Found the exact instruction chain causing the `0xe1...` free-run:
-
-```
-fp = *(0x12082340)          ; -> SINGLETON (0x7f002000), via the pointer-table write we already do
-r1 = *fp                    ; -> *(SINGLETON+0) -> our own override -> 0x7f002100
-0x1203826a: ldr.w r0, [r1, #0xa4]   ; r0 = *(0x7f0021a4)  = SINGLETON + 0x1a4
-0x1203826e: ldr   r0, [r0]          ; r0 = *r0            (double indirection!)
-0x12038270: blx   r0                ; call it
-```
-
-`SINGLETON + 0x1a4` held our blanket-fill default (`0x7f003000`, the SINGLETON2 BX-LR-stub address). Single-indirection callers elsewhere correctly `blx` that value directly and hit real, executable stub code. This call site instead **dereferences it one more time** (`r0 = *r0`) — reading SINGLETON2's raw opcode bytes (`0xE12FFF1E`, the literal `BX LR` encoding) as if they were a pointer *value*, then branching to that garbage, landing in unmapped territory and free-running through auto-mapped zero pages exactly as session 23 parts 4-6 characterized.
-
-Fix: added a small pointer-cell at `SINGLETON2+0x100` (`0x7f003100`) whose *content* is the value `0x7f003000`, and pointed `SINGLETON+0x1a4` at that cell instead of at SINGLETON2 directly. Now the double dereference resolves correctly: `*(SINGLETON+0x1a4)` → `0x7f003100` → `*(0x7f003100)` → `0x7f003000` → `blx 0x7f003000` → real, safe BX-LR stub. (First attempt patched `SINGLETON+0xa4` directly and missed the extra `*fp` hop through the `+0x000` override — corrected to `+0x1a4` once the full chain was traced.)
-
-## Result
+## Current blocker
 
 ```
->>> SINGLETON+0x1a4 double-indirection fix: points to 0x7f003100 which holds 0x7f003000
->>> SINGLETON2 dispatch count before N.l: 0
-WARN ... emulate RX@0x120381c1[libexec.so]0x381c1 exception ... UC_ERR_FETCH_PROT ...
+WARN ... emulate RX@0x120381c1[libexec.so]0x381c1 exception ... UC_ERR_FETCH_PROT (Fetch from non-executable memory) ...
 >>> N.l threw: java.lang.IllegalStateException: Invalid boolean value=-1
->>> SINGLETON2 dispatch count after N.l: 3      <- new high (was 2)
+>>> SINGLETON2 dispatch count after N.l: 3
 ```
 
-No `[runaway-detect]` line at all — the free-run is gone. The error type also changed meaningfully: **`UC_ERR_FETCH_PROT`** ("Fetch from non-executable memory"), not `UC_ERR_FETCH_UNMAPPED`/`UC_ERR_MAP`. This means `0x120381c1`'s page (`0x12038000`) **is mapped now**, just not executable at that moment — this is exactly session 21's original finding ("the page at 0x120381c0 was made non-exec by secondary loader"), now showing through cleanly instead of being masked by the free-run crash that was happening first.
+This is **session 21's original finding**, now showing through cleanly: page `0x12038000` (containing `0x120381c1`) gets its EXEC permission stripped by something session 21 called "the secondary loader," mid-execution — despite us `mem_protect`-ing it to RWX once, right before calling N.l.
+
+**Deterministic across reruns** — same address, same error type, same args, every time (confirmed 3x in a row with identical `arguments=[...1709804316]`).
+
+## Fix attempts tried this session, both inconclusive/negative
+
+1. **Raw `UC_HOOK_MEM_FETCH_PROT` hook** (session 21's pre-built "Plan F", reflection-based, was disabled for corruption risk). Re-enabled just this one hook (split the old blanket `ENABLE_RAW_HOOKS` flag into three independent flags — `ENABLE_FETCH_PROT_HOOK`/`ENABLE_WRITE_PROT_HOOK`/leave UNMAPPED off since our safe `EventMemHook` already covers that). Result: fired once for an unrelated, spurious address (`0x0`, garbage PC) — never fired for the real `0x120381c1` fault — and the real crash's error type changed run-to-run (`FETCH_PROT` → `UC_ERR_MAP`) despite identical inputs, confirming the original "reflection corrupts internal state" warning. **Reverted** (`ENABLE_FETCH_PROT_HOOK` back to `false`).
+2. **Piggyback `mem_protect` on the SINGLETON2 dispatch hook** (safe, no reflection, fires 3x reliably). No effect — crash identical to the unpatched baseline. This tells us something useful: **whatever strips EXEC happens strictly after the 3rd SINGLETON2 dispatch and before reaching `0x120381c1`** — our nudge fires during/before that window, not inside it, so it doesn't help. A periodic nudge from an earlier checkpoint isn't enough; the fix needs to land inside that specific narrow window.
 
 ## Key files modified this session
 
 | File | Changes |
 |------|---------|
-| `_scratch/Unpack.java` | (cumulative, parts 1-6) + **new**: `SINGLETON+0x1a4` double-indirection fix (pointer-cell at `SINGLETON2+0x100`) |
-| `_scratch/disasm_38273.py` | **new** — offline capstone disassembler for the `0x12038200-0x300` byte window, used to find the exact double-indirection instruction chain without a remote round-trip |
+| `_scratch/Unpack.java` | b2b unconditional call; SINGLETON2 dispatch-count hook; FETCH LIMIT bisection instrumentation; `0x7b290` bounce-every-hit fix; same-LR-streak runaway detector; `SINGLETON+0x1a4` double-indirection fix; `ENABLE_RAW_HOOKS` split into 3 flags; SINGLETON2-dispatch re-protect nudge (didn't help, left in — harmless) |
+| `_scratch/disasm_38273.py` | **new** — offline capstone disassembler, reusable for any future "what's actually at this runtime address" question without a remote round-trip |
 
 ## To reproduce
 
@@ -48,7 +45,7 @@ python _scratch/run_lever_remote2.py
 
 ## Next steps
 
-1. **Fix the EXEC-permission loss at 0x120381c1 (page 0x12038000) for real, not just once before N.l.** We already `mem_protect` that page to RWX right before calling N.l (`>>> PAGE@0x12038000 re-protected EXEC before N.l`), but something re-removes EXEC on it during N.l's own execution. Same class of problem the earlier `0x12038000` canary checks explored (session 23 part 3) — but those checks were *data* reads (which don't reveal EXEC-bit loss). Add a periodic **re-`mem_protect`** (not just re-`mem_map`) of that page during N.l, or — better — find what's un-protecting it (likely an `mprotect`-equivalent SVC call session 21 called "secondary loader") and hook that call directly.
-2. **Disassemble around 0x120381c1 itself** the same way part 7 did for `0x12038273` — pull the byte window offline, decode with capstone, understand what's supposed to be there and why the protection keeps getting stripped.
-3. Now that `SINGLETON2 dispatch count` is climbing (0→2→3 across this session's fixes), each new dispatch is a signal real code is reaching further into the fake vtable — keep tracking it as a progress metric for future fixes.
-4. The `same-LR-streak` runaway detector (session 23 part 6) stays installed as a safety net/diagnostic — didn't need to fire this run, but costs nothing to leave in for future free-run-class bugs.
+1. **Narrow the window precisely.** We know EXEC is lost strictly between SINGLETON2 dispatch #3 and `0x120381c1`. Add a CodeHook at `0x120381c1` itself (or a few bytes before it) that, on the *first* hit, force-reasserts RWX on the page before the fetch actually happens — a hook fires on successful fetch, but we need to catch it *before* the permission check, which a plain `CodeHook` at that exact address can't do (the fault happens before the hook could fire). Instead: hook the SINGLETON2 dispatch #3 call site specifically (not all dispatches) and single-step or trace forward a short, bounded window from there to find the actual mprotect-equivalent call.
+2. **Reuse `_scratch/disasm_38273.py`** (extend it to cover a wider byte range, e.g. `0x12038100-0x12038300`) against a dump taken right after dispatch #3, to find what code runs between the 3rd dispatch and the fault — this is now a known, bounded search window instead of an open-ended one.
+3. Per session 21's own notes (already in this file's history): the mprotect causing this "wraps... from host code, not from a unicorn SVC" — meaning it's unidbg's own Java-side memory manager doing it as a side effect of something (likely still the `NewObjectV`/JNI dispatch path), not a guest CPU instruction we can NOP. The `blx r3` at `0x12038226` is already NOP'd (an existing, older fix) — check whether that patch is still being applied correctly and is actually upstream of this specific fault, or whether there's a second, unpatched call doing the same thing.
+4. `SINGLETON2 dispatch count` is the best available progress metric right now (0→2→3 across this session's two real fixes) — any future fix attempt should be checked against whether it moves that number.
