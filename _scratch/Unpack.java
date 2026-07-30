@@ -1581,6 +1581,57 @@ public class Unpack extends AbstractJni {
                     t.printStackTrace(System.out);
                 }
 
+                // Session 23 part 14: NewObjectV never fires (part 13). Broaden the same
+                // ground-truth technique to a spread of other JNI env functions (offsets from
+                // unidbg-android 0.9.10-SNAPSHOT DalvikVM.java, same GitHub source) to see the
+                // REAL JNI call sequence leading up to the 0x12038000 EXEC-loss crash, instead
+                // of guessing which single function is responsible.
+                try {
+                    Pointer env2 = vm.getJNIEnv();
+                    Pointer funcTable2 = env2.getPointer(0);
+                    Object[][] jniTargets = new Object[][]{
+                        {"FindClass", 0x18L},
+                        {"GetObjectClass", 0x7cL},
+                        {"IsInstanceOf", 0x80L},
+                        {"GetMethodID", 0x84L},
+                        {"NewObject", 0x70L},
+                        {"CallObjectMethodV", 0x8cL},
+                        {"CallBooleanMethodV", 0x98L},
+                        {"CallVoidMethodV", 0xf8L},
+                    };
+                    for (Object[] jt : jniTargets) {
+                        final String name = (String) jt[0];
+                        long offset = (Long) jt[1];
+                        Pointer p = funcTable2.getPointer(offset);
+                        if (p == null) {
+                            System.out.println(">>> [" + name + "] SVC stub is null, skipping");
+                            continue;
+                        }
+                        long addr = ((UnidbgPointer) p).toUIntPeer();
+                        final int[] hits = new int[1];
+                        backend.hook_add_new(new CodeHook() {
+                            public void hook(Backend b, long address, int size, Object user) {
+                                int n = ++hits[0];
+                                if (n <= 5) {
+                                    long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue();
+                                    long r2 = b.reg_read(ArmConst.UC_ARM_REG_R2).longValue();
+                                    long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                                    System.out.println(">>> [" + name + " SVC] hit #" + n
+                                            + " r1=0x" + Long.toHexString(r1)
+                                            + " r2=0x" + Long.toHexString(r2)
+                                            + " LR=0x" + Long.toHexString(lr));
+                                }
+                            }
+                            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                            public void detach() {}
+                        }, addr, addr, null);
+                        System.out.println(">>> [" + name + "] SVC hook installed at 0x" + Long.toHexString(addr));
+                    }
+                } catch (Throwable t) {
+                    System.out.println(">>> multi-JNI SVC hook setup FAILED: " + t);
+                    t.printStackTrace(System.out);
+                }
+
                 // Write the SINGLETON address into the binary's pointer table so code that loads
                 // from 0x12082340 gets a struct pointer (not the BX LR stub address).
                 byte[] singDataPtr = new byte[] {

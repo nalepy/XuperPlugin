@@ -1,4 +1,14 @@
-# Next Blocker — NewObjectV theory definitively ruled out via ground-truth Java hook; true trigger still unknown
+# Next Blocker — ALL real JNI dispatch ruled out at once; "vtable calls" this session were our own fake struct, not unidbg's real env
+
+## Update (session 23 part 14) — zero real JNI calls happen at all; structural finding, not just another eliminated guess
+
+Extended part 13's technique to 8 JNI env functions at once (`FindClass`, `GetObjectClass`, `IsInstanceOf`, `GetMethodID`, `NewObject`, `CallObjectMethodV`, `CallBooleanMethodV`, `CallVoidMethodV`), each hooked at its real runtime SVC address via `vm.getJNIEnv()` (same ground-truth method as part 13, offsets from unidbg-android's `DalvikVM.java`, fetched from GitHub). All 8 installed cleanly with real resolved addresses (`0xfffe00b0` through `0xfffe0430`).
+
+**Zero hits on all 8, for the entire run.** Not one real JNI env function is called before the crash.
+
+**This reframes the whole session.** Every "JNI-vtable-shaped" indirect call the parallel agents identified in parts 10-11 (the `ldr r3,[rX,#N]; blx r3` pattern through a global struct at offsets 0x10/0x1c/0x38/0x44/0x98/0xc4/0xd4/0x18c) is dispatching through **our own fake `SINGLETON` struct** (`0x7f002000`, the blanket-filled stub we authored this session), not through unidbg's real `JNIEnv` (which lives at a completely different address, resolved via `vm.getJNIEnv()`). They *looked* JNI-vtable-shaped because that's genuinely the pattern the packer's code was written against — but since `SINGLETON` is synthetic, none of those calls ever reach real JNI dispatch. The old session 18/21 "NewObjectV" comment likely describes either a different code path entirely (something before N.l is invoked, not traced this session) or intended/expected behavior on real Android that this emulation's fake-struct approach structurally can't reach.
+
+**Consequence**: the "search unidbg source for host-side JNI-triggered mprotect" direction from part 13 is now also closed — there's no JNI call for it to hang off of. If the mprotect is host-side at all, it's triggered by something other than a JNI env function call (maybe by an SVC unrelated to JNI, maybe by unidbg's ELF-loader path if some code re-triggers a `dlopen`/library-load pass — worth checking for that specifically, `AndroidElfLoader.java` has its own `mem_protect` call tied to `PT_LOAD` segment processing, found during this search but not yet investigated for relevance).
 
 ## Update (session 23 part 13) — went host-level, got real unidbg source, ruled out the old NewObjectV theory for good
 
@@ -119,20 +129,19 @@ cd C:/Users/Nestor/Workspace/Xuper/XuperPlugin
 python _scratch/run_lever_remote2.py
 ```
 
-## Next steps (updated, part 13 — five theories eliminated, need a fresh one)
+## Next steps (updated, part 14 — the JNI-dispatch branch of the tree is fully closed now)
 
 **Ruled out with hard evidence, don't re-test these:**
 - Blanket SINGLETON stub blocking dispatch (falsified — dispatch count now 3)
 - FETCH LIMIT being too low (bisected 50→300→1500, always dies at cap+1 back when this was still the active bug — since fixed)
 - On-demand mapping churn corrupting `0x12038000` (canary reads + forced re-protect never failed)
 - A guest-code `mprotect`-numbered SVC anywhere in the ~10 traced functions (exhaustive disasm sweep, zero hits)
-- `NewObjectV` being called at all before the crash (hooked the real SVC dispatch point via `vm.getJNIEnv()`, confirmed via unidbg's actual GitHub source — zero hits, it's just not called, likely because the existing `0x12038226` NOP already fully suppresses it)
+- **Any real JNI env function call at all** — `NewObjectV`, `FindClass`, `GetObjectClass`, `IsInstanceOf`, `GetMethodID`, `NewObject`, `CallObjectMethodV`, `CallBooleanMethodV`, `CallVoidMethodV` — all hooked at their real ground-truth SVC addresses via `vm.getJNIEnv()`, zero hits on any of them, entire run. **This closes the whole "it's a JNI call doing this" branch, not just one function.** The "JNI-vtable-shaped" indirect calls found in earlier disasm rounds go through our own fake `SINGLETON` struct, not unidbg's real `JNIEnv` — a structural finding, not a per-function guess.
 
 **Promising directions for a fresh session:**
-1. **Use the same `vm.getJNIEnv()` technique on OTHER JNI function table entries.** We now have a proven, cheap, ground-truth method (unidbg's `VM.getJNIEnv()` → function table → real SVC address → `CodeHook`) — apply it to other candidates besides NewObjectV: `FindClass`, `GetMethodID`, `CallObjectMethodV`, or whichever env function the *actual* re-entry into `0x120381c0` goes through, once identified.
-2. **Look for unidbg's own internal mprotect/mem_protect calls directly in source**, rather than guessing which JNI function triggers it. Search `zhkl0228/unidbg` (via `gh search code "mem_protect"` or `"mprotect"` in the relevant repo) for every call site in `Memory`/`Backend`/DVM class-loading code, and check which are reachable from a native→Java bridge (SVC handler) rather than pure Java-side setup — that narrows the host-side search a lot faster than reading files top to bottom.
-3. **Trace what SVC (if any) fires right before the crash.** We have `_NewObjectV`'s resolved SVC address as a working example — do the same for a handful of other high-traffic env functions and log every hit right up to the crash, to see which one (if any) fires last before `0x120381c0`'s second entry.
-4. **Alternative pivot: accept it and re-trigger instead of prevent.** If this really is decrypt-execute-reprotect packer behavior (still not ruled out), stop trying to stop the reprotect and instead figure out what re-populates/re-decrypts this page on a fresh call, then trigger that ourselves before the second entry to `0x120381c0`.
-5. `SINGLETON2 dispatch count` remains the best available progress metric (0→2→3 across this session's two real fixes) — any future fix attempt should be checked against whether it moves that number further.
-6. Bonus finding worth remembering for later: `0x1203b6f8` is a genuine anti-tamper kill-switch (`kill(getpid(), SIGABRT)` → `kill(getpid(), SIGKILL)`), gated behind a flag byte at `ctx+0x188` and two vtable calls. Not relevant to this bug, but worth knowing it exists if future runs start dying with SIGABRT/SIGKILL instead of the usual exceptions.
-7. `gh search code`/`gh api` against `zhkl0228/unidbg` worked cleanly with no auth needed this session — a fast, reliable way to get ground truth about unidbg's behavior instead of guessing from symptoms. Reuse it early next time instead of re-deriving via trial and error.
+1. **`AndroidElfLoader.java`'s `mem_protect` call, tied to ELF `PT_LOAD` segment processing** — found during the source search but not yet investigated. If anything triggers a second library-load/relocation pass (even implicitly, inside unidbg's own bookkeeping) that overlaps our page in address space, this is the mechanism that would silently reprotect it. Worth checking whether `dlopen`/`System.loadLibrary`-equivalent ever fires a second time this session.
+2. **Look for unidbg's own internal mprotect/mem_protect calls not tied to JNI at all** — since JNI dispatch is now ruled out, broaden the source search to `Memory`/`Backend`/`AbstractLoader` reachable from other native→Java bridges (real Linux syscalls like `mmap`/`brk`/`mprotect` handled by `ARM32SyscallHandler`, or internal relocation/symbol-resolution code) rather than JNI-specific ones.
+3. **Alternative pivot: accept it and re-trigger instead of prevent.** If this really is decrypt-execute-reprotect packer behavior (still not ruled out), stop trying to stop the reprotect and instead figure out what re-populates/re-decrypts this page on a fresh call, then trigger that ourselves before the second entry to `0x120381c0`.
+4. `SINGLETON2 dispatch count` remains the best available progress metric (0→2→3 across this session's two real fixes) — any future fix attempt should be checked against whether it moves that number further.
+5. Bonus finding worth remembering for later: `0x1203b6f8` is a genuine anti-tamper kill-switch (`kill(getpid(), SIGABRT)` → `kill(getpid(), SIGKILL)`), gated behind a flag byte at `ctx+0x188` and two vtable calls. Not relevant to this bug, but worth knowing it exists if future runs start dying with SIGABRT/SIGKILL instead of the usual exceptions.
+6. `gh search code`/`gh api` against `zhkl0228/unidbg` worked cleanly with no auth needed this session — a fast, reliable way to get ground truth about unidbg's behavior instead of guessing from symptoms. Reuse it early next time. Same for `vm.getJNIEnv()` → function-table-offset → real SVC address → `CodeHook`, now a proven, reusable technique for any future "is X actually being called" question.
