@@ -1638,17 +1638,25 @@ public class Unpack extends AbstractJni {
                 //   * FETCH_UNMAPPED — code branches to decrypted pages; if the write missed
                 //     (no WRITE_UNMAPPED fell through), we still map and let it fail gracefully.
                 final int[] fetchCount = {0};
+                final long[] minFetchAddr = {Long.MAX_VALUE};
+                final long[] maxFetchAddr = {0};
+                final int FETCH_CAP = 1500;
                 backend.hook_add_new(new EventMemHook() {
                     public boolean hook(Backend b, long address, int size, long value, Object user,
                             EventMemHook.UnmappedType type) {
                         if (type == EventMemHook.UnmappedType.Fetch) {
+                            if (address < minFetchAddr[0]) minFetchAddr[0] = address;
+                            if (address > maxFetchAddr[0]) maxFetchAddr[0] = address;
                             // Session 23: the cap of 50 was cutting off a walk (0x7b290-0xad000,
                             // ~50 pages) mid-stream, causing UC_ERR_FETCH_UNMAPPED at 0x120381c1
                             // which unidbg then reports as N.l returning a garbage -1 — NOT a real
                             // decrypt-failure sentinel. Raised to 300, still well under the ~2000
                             // on-demand-mapping count that was found to corrupt Unicorn internals.
-                            if (fetchCount[0]++ >= 1500) {
-                                System.out.println(">>> [EventMemHook] FETCH LIMIT REACHED (" + fetchCount[0] + "), NOT mapping");
+                            if (fetchCount[0]++ >= FETCH_CAP) {
+                                System.out.println(">>> [EventMemHook] FETCH LIMIT REACHED (" + fetchCount[0] + "), NOT mapping"
+                                    + " requestedAddr=0x" + Long.toHexString(address)
+                                    + " seenRange=[0x" + Long.toHexString(minFetchAddr[0])
+                                    + ",0x" + Long.toHexString(maxFetchAddr[0]) + "]");
                                 return false;
                             }
                         }
@@ -1657,10 +1665,13 @@ public class Unpack extends AbstractJni {
                                 : "READ";
                         // Fast 4KB mapping — no verbose logging to avoid slowing down the scan
                         long pageStart = address & ~0xfffL;
-                        // Only log every 256th mapping (one per MB of scan)
-                        if ((fetchCount[0] & 0xff) == 0) {
-                            System.out.println(">>> [EventMemHook] FETCH #" + fetchCount[0]
-                                + " mapping 4KB at 0x" + Long.toHexString(pageStart));
+                        // Session 23: log every FETCH address near the cap (last 30) to see
+                        // exactly what range is being walked right before the crash, plus the
+                        // usual sparse sampling for the full run.
+                        if ((fetchCount[0] & 0xff) == 0 || fetchCount[0] >= FETCH_CAP - 30) {
+                            System.out.println(">>> [EventMemHook] " + tag + " #" + fetchCount[0]
+                                + " mapping 4KB at 0x" + Long.toHexString(pageStart)
+                                + " (raw addr 0x" + Long.toHexString(address) + ")");
                         }
                         try {
                             b.mem_map(pageStart, 0x1000L,
@@ -1693,6 +1704,49 @@ public class Unpack extends AbstractJni {
                     public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
                     public void detach() {}
                 }, 112, null); // UC_HOOK_MEM_UNMAPPED mask: READ(16)|WRITE(32)|FETCH(64) = 112
+
+                // Session 23 part 4: 0x7b290 is the exact stale on-disk default from the
+                // ctor-skipped pointer table at 0x12082340 (session 22). Something is reading
+                // that unpopulated slot and branching to it, landing PC in zero-filled memory
+                // where it free-runs (0x00000000 decodes as ARM `ANDEQ r0,r0,r0`, a no-op) until
+                // our FETCH cap cuts it off ~1500+ pages later. Catch the ORIGIN: fire once,
+                // dump the caller (LR) and registers, then bounce straight back instead of
+                // letting it wander into the zero wasteland at all.
+                final int[] runawayHits = {0};
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        public void hook(Backend b, long address, int size, Object user) {
+                            int n = ++runawayHits[0];
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                            if (n <= 10 || n % 1000 == 0) {
+                                long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                                long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue();
+                                long r2 = b.reg_read(ArmConst.UC_ARM_REG_R2).longValue();
+                                long r3 = b.reg_read(ArmConst.UC_ARM_REG_R3).longValue();
+                                System.out.println(">>> [runaway-origin@0x7b290] hit #" + n + " LR=0x" + Long.toHexString(lr)
+                                        + " r0=0x" + Long.toHexString(r0) + " r1=0x" + Long.toHexString(r1)
+                                        + " r2=0x" + Long.toHexString(r2) + " r3=0x" + Long.toHexString(r3));
+                            }
+                            // Bounce straight back to the caller (session 23 part 4 learned a
+                            // one-shot bounce just gets immediately re-entered by the same
+                            // caller retrying the same garbage-pointer call, then free-runs for
+                            // real on the second, unguarded hit). Bound the retries though —
+                            // if this is a genuine infinite tight loop rather than a bounded
+                            // retry-with-incrementing-candidate, give up after 5000 and fall
+                            // back to letting it proceed normally (known crash, but informative).
+                            if (n <= 5000) {
+                                b.reg_write(ArmConst.UC_ARM_REG_PC, lr);
+                            } else if (n == 5001) {
+                                System.out.println(">>> [runaway-origin@0x7b290] giving up after 5000 bounces, letting it proceed normally");
+                            }
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x7b290L, 0x7b290L, null);
+                    System.out.println(">>> Runaway-origin hook installed at 0x7b290");
+                } catch (Throwable t) {
+                    System.out.println(">>> Runaway-origin hook FAILED: " + t);
+                }
 
                 // DISABLED: Backend proxy — was causing page_collection_lock_arm crashes.
                 // The secondary loader's mprotect is already handled by re-protecting

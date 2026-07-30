@@ -1,31 +1,46 @@
-# Next Blocker — a second, unhooked veneer-table walk consumes any FETCH budget we give it
+# Next Blocker — past the 0x7b290 table-walk obstacle; SINGLETON2 finally dispatches; new crash further downstream
 
-## Status (2026-07-30 session 23, part 3)
+## Status (2026-07-30 session 23, part 5) — real forward progress
 
-Three clean bisection experiments this session, all falsifying prior theories and narrowing hard on one answer: N.l's `-1` is caused by `UC_ERR_FETCH_UNMAPPED` crashing mid-execution, at whatever moment our own on-demand FETCH-mapping safety cap gets hit — and **that cap always gets hit, no matter how high we set it**, because the thing consuming it is an unbounded walk we haven't actually killed (only ONE of its entry points is hooked).
+The bounce-back fix for the `0x7b290` runaway **works**. Execution now gets meaningfully further than any prior run this session: it walks a real 10-entry class-descriptor table, dispatches through the SINGLETON2 stub twice (first time ever, all session), and only then crashes at a new, different address.
 
-## Falsified this session
+## What changed and why it works
 
-1. ~~Blanket SINGLETON stub kills real subroutines~~ — disproven. Single-address hook on the SINGLETON2 stub (0x7f003000), active the whole run: **0 hits**, always. N.l/b2b never dispatch through it.
-2. ~~b2b is a standalone decrypt path~~ — disproven. Called unconditionally regardless of `l()`'s result: returns `null` after only 2 instructions, gated by the same uninitialized state as `l()`.
-3. ~~FETCH LIMIT=50 was cutting the walk off early, just raise it~~ — disproven three times over:
-   - cap=50 → dies at fetch **51**
-   - cap=300 → dies at fetch **301**
-   - cap=1500 → dies at fetch **1501**
-   Every single time, the crash lands at the exact same relative point: `cap+1`. This isn't "the walk needs about N more pages" — it's an **effectively unbounded** loop that will consume literally any budget we hand it. There is no finite cap below the ~2000-mapping Unicorn-corruption ceiling (session 22) that lets it finish on its own.
-4. ~~On-demand mapping churn corrupts the unrelated page at 0x12038000~~ — disproven. A canary `mem_read` of 0x12038000 every 10 fetches (up to 1500) never once failed. Continuously forcing `mem_map`+`mem_protect` RWX on that page every 10 fetches didn't change the outcome either — same crash, same address, same relative timing.
+Session 23 part 4 found `0x7b290` is the stale on-disk default from the ctor-skipped pointer table, and that a single one-shot bounce (redirect PC back to LR) just deferred the problem by one iteration — the caller immediately re-entered the same broken call and free-ran through zero memory anyway. Fix: **bounce every single time** (bounded to 5000, as a safety valve against a genuine infinite loop), not just once.
 
-## Current understanding
+Turns out it's not an infinite loop or a random free-run — it's a **real, bounded table walk**. Register `r1` at each hit steps through distinct addresses ~0x20-0x30 bytes apart, all inside the module's own data section:
 
-The crash is always `UC_ERR_FETCH_UNMAPPED` at `0x120381c1` (inside `libexec.so`, page `0x12038000` — same page session 21 already found the "secondary loader" was making non-exec). The page itself checks out fine by every probe we've thrown at it. The actual mechanism: some loop is requesting fresh unmapped-fetch pages continuously; our `EventMemHook` auto-maps each one on demand up to a cap, then refuses further mapping past the cap — and whatever page it's asking for at exactly `cap+1` happens to be the one needed to keep real control flow going, so denying it kills execution.
+```
+>>> [runaway-origin@0x7b290] hit #1  LR=0x12037689 r1=0x1208d670 ...
+>>> [runaway-origin@0x7b290] hit #2  LR=0x12037689 r1=0x1208d350 ...
+>>> [runaway-origin@0x7b290] hit #3  LR=0x12037689 r1=0x1208d37a ...
+>>> [runaway-origin@0x7b290] hit #4  LR=0x12037689 r1=0x1208d390 ...
+...
+>>> [runaway-origin@0x7b290] hit #10 LR=0x12037689 r1=0x1208d460 ...
+```
 
-Session 22 already reverse-engineered **one** instance of this mechanism: the veneer table at `0x1207b400` dispatches via chained ARM `LDR PC` trampolines to every 4KB page from `0x7b290` upward, and the *first* entry point into it (a `BL` at `0x1203767c`) is already hooked and killed (`>>> [scan-kill@0x1203767c] nuking scan call #1` fires exactly once, successfully, every run). But something is still generating an apparently-endless stream of fresh unmapped-fetch requests afterward — almost certainly a **second, unhooked entry point into that same veneer table**, or a second independent walk of the same shape, that our single kill-hook doesn't cover because it's keyed to one exact address rather than the whole mechanism.
+This is a genuine table of ~10 (or more — logging capped at 10) class-descriptor-like entries whose dispatch/callback field is *uniformly* the same stale default (`0x7b290`, unpopulated by the skipped ctors, same root cause as session 21/22's `0x12082340`/`0x1207b400` findings, just a different table instance). Bouncing back after each failed entry lets the walk's own loop logic advance to the next entry naturally, instead of getting stuck free-running through zero memory on the very first one.
+
+## Result of getting past it
+
+```
+>>> SINGLETON2 dispatch count before N.l: 0
+>>> SINGLETON2 dispatch count after N.l: 2      <- first-ever nonzero this session
+>>> SINGLETON2 dispatch count before b2b: 2
+>>> SINGLETON2 dispatch count after b2b: 2
+>>> [EventMemHook] FETCH LIMIT REACHED (1501), NOT mapping requestedAddr=0xe18da000 seenRange=[0x7b290,0xe18da000]
+>>> N.l threw: java.lang.IllegalStateException: Invalid boolean value=-1
+```
+
+This directly overturns session 23 part 1's finding ("SINGLETON2 dispatch count always 0") — that was true only because execution never got far enough to reach it. Getting past the table-walk obstacle lets N.l reach and use the fake dispatch table for real, twice.
+
+It still eventually dies — but now at a wildly different, much larger address (`0xe18da000`, ~3.6GB) instead of the deterministic climb from `0x7b290`. That's a new, distinct frontier, not the same bug resurfacing.
 
 ## Key files modified this session
 
 | File | Changes |
 |------|---------|
-| `_scratch/Unpack.java` | b2b unconditional call; post-N.l SINGLETON dump; SINGLETON2 whole-run dispatch-count hook; FETCH LIMIT bisected 50→300→1500 (left at 1500); periodic (every 10 fetches) forced re-map+re-protect of 0x12038000 (proven inconsequential, left in as a harmless safety net) |
+| `_scratch/Unpack.java` | (cumulative, see parts 1-4) + **new**: `0x7b290` CodeHook now bounces PC→LR on *every* hit (bounded at 5000, was one-shot), with hit-register logging (first 10, then every 1000th) |
 
 ## To reproduce
 
@@ -36,7 +51,7 @@ python _scratch/run_lever_remote2.py
 
 ## Next steps
 
-1. **Kill the whole veneer table, not one entry point.** Instead of a single-address hook at `0x1203767c`, install a *range* hook covering the veneer table itself (`0x1207b400` onward — session 22 already mapped its shape: 16-byte trampolines, one per target page). Any PC landing anywhere in that range should immediately force `R0=0` and redirect out, the same way the existing kill-hook does — this should catch the second/unhooked entry point regardless of how it got there.
-2. **Find the second entry point concretely** — if (1) doesn't fully resolve it, dump the CALL SITE for the fetches that are consuming the budget (LR register at the moment `EventMemHook` maps each page) to find what's driving this second walk, the same way `[SINGLETON2 dispatch #n] called from LR=...` was used earlier for the vtable question.
-3. Once N.l can complete without crashing, **re-check the SINGLETON dispatch count** (already instrumented, 0 hits so far) — if it's still 0 after this walk is properly killed, that's the next real thing to chase (dispatch table genuinely never used, vs. never reached because of this crash).
-4. `b2b` is not worth re-testing independently until `l()` gets past this crash — it's confirmed to depend on the same init state.
+1. **Characterize the new crash at 0xe18da000.** Is this address a real code target (dereferenced from somewhere sane) or another stale/garbage pointer artifact? Given its size (~3.6GB, well outside any 32-bit ARM Android process's real address space norms), it smells like another uninitialized-read situation rather than legitimate code — worth adding a similar one-shot LR/register dump hook once its exact value stabilizes across runs (check if it's deterministic first — rerun once without changing anything to confirm reproducibility before building a targeted hook).
+2. **Log all 10 table-walk entries, not just the first ten hits' registers** — bump the log cap or check if the table only has ~10 entries (walk may have exited the table cleanly and moved on to unrelated code, in which case the crash at 0xe18da000 is genuinely a separate, later mechanism).
+3. **Investigate the two SINGLETON2 dispatches** — now that they're finally happening, capture the LR (caller) for each one (the SINGLETON2 hook already logs LR per-hit, capped at 30 — check those two entries specifically) to learn what real code is trying to call through the fake vtable, now that we know it's actually reached.
+4. Keep the bounce-forever pattern (proven to work) as the template for any future stale-pointer-table obstacle — it's a generalizable technique now, not a one-off hack.
