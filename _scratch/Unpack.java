@@ -1641,22 +1641,63 @@ public class Unpack extends AbstractJni {
                 final long[] minFetchAddr = {Long.MAX_VALUE};
                 final long[] maxFetchAddr = {0};
                 final int FETCH_CAP = 1500;
+                // Session 23 part 6: the 0x7b290 table-walk and the NEW runaway found at
+                // fetch #256+ (LR frozen at 0x12038273 for ~1245 straight fetches, climbing
+                // 0xe13fd000->0xe18d9000 one page at a time) are the same bug class — PC
+                // branches to a garbage/uninitialized pointer, lands in unmapped memory we
+                // auto-map as zero, and zero bytes decode as ARM `ANDEQ r0,r0,r0` (no-op), so
+                // PC free-runs straight through every subsequent page forever. Real code
+                // would eventually branch/call/return and change LR; a free-run doesn't touch
+                // LR at all. So: N consecutive Fetch-unmapped events with an IDENTICAL LR is a
+                // reliable, address-agnostic runaway signal — generalizes beyond hardcoding
+                // each specific bad address (0x7b290 was one instance; there may be others).
+                final long[] lastLR = {-1L};
+                final int[] sameLRStreak = {0};
+                final boolean[] runawayBounced = {false};
+                final int RUNAWAY_STREAK_THRESHOLD = 8;
                 backend.hook_add_new(new EventMemHook() {
                     public boolean hook(Backend b, long address, int size, long value, Object user,
                             EventMemHook.UnmappedType type) {
                         if (type == EventMemHook.UnmappedType.Fetch) {
                             if (address < minFetchAddr[0]) minFetchAddr[0] = address;
                             if (address > maxFetchAddr[0]) maxFetchAddr[0] = address;
+
+                            long lrNow0 = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                            if (lrNow0 == lastLR[0]) {
+                                sameLRStreak[0]++;
+                            } else {
+                                lastLR[0] = lrNow0;
+                                sameLRStreak[0] = 1;
+                                runawayBounced[0] = false;
+                            }
+                            if (sameLRStreak[0] >= RUNAWAY_STREAK_THRESHOLD) {
+                                if (!runawayBounced[0]) {
+                                    System.out.println(">>> [runaway-detect] " + sameLRStreak[0]
+                                        + " consecutive fetches with frozen LR=0x" + Long.toHexString(lrNow0)
+                                        + " at addr=0x" + Long.toHexString(address)
+                                        + " — bouncing PC back to LR instead of mapping further");
+                                    runawayBounced[0] = true;
+                                }
+                                b.reg_write(ArmConst.UC_ARM_REG_PC, lrNow0);
+                                return true;
+                            }
+
                             // Session 23: the cap of 50 was cutting off a walk (0x7b290-0xad000,
                             // ~50 pages) mid-stream, causing UC_ERR_FETCH_UNMAPPED at 0x120381c1
                             // which unidbg then reports as N.l returning a garbage -1 — NOT a real
                             // decrypt-failure sentinel. Raised to 300, still well under the ~2000
                             // on-demand-mapping count that was found to corrupt Unicorn internals.
                             if (fetchCount[0]++ >= FETCH_CAP) {
+                                long lrAtCap = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                                long r0AtCap = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                                long r1AtCap = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue();
                                 System.out.println(">>> [EventMemHook] FETCH LIMIT REACHED (" + fetchCount[0] + "), NOT mapping"
                                     + " requestedAddr=0x" + Long.toHexString(address)
                                     + " seenRange=[0x" + Long.toHexString(minFetchAddr[0])
-                                    + ",0x" + Long.toHexString(maxFetchAddr[0]) + "]");
+                                    + ",0x" + Long.toHexString(maxFetchAddr[0]) + "]"
+                                    + " LR=0x" + Long.toHexString(lrAtCap)
+                                    + " r0=0x" + Long.toHexString(r0AtCap)
+                                    + " r1=0x" + Long.toHexString(r1AtCap));
                                 return false;
                             }
                         }
@@ -1669,9 +1710,10 @@ public class Unpack extends AbstractJni {
                         // exactly what range is being walked right before the crash, plus the
                         // usual sparse sampling for the full run.
                         if ((fetchCount[0] & 0xff) == 0 || fetchCount[0] >= FETCH_CAP - 30) {
+                            long lrNow = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
                             System.out.println(">>> [EventMemHook] " + tag + " #" + fetchCount[0]
                                 + " mapping 4KB at 0x" + Long.toHexString(pageStart)
-                                + " (raw addr 0x" + Long.toHexString(address) + ")");
+                                + " (raw addr 0x" + Long.toHexString(address) + ") LR=0x" + Long.toHexString(lrNow));
                         }
                         try {
                             b.mem_map(pageStart, 0x1000L,
