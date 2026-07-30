@@ -4,7 +4,33 @@ For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md),
 [SESSION-2026-07-29.md](SESSION-2026-07-29.md) first.
 
-## TL;DR (session 18 — 2026-07-29 ~21:20) — READ THIS FIRST
+## TL;DR (session 19 — 2026-07-29 ~21:35) — READ THIS FIRST
+
+**Disassembled `0x12026d74`: it's a `strcspn`-style text tokenizer, and we've been feeding it
+raw binary (the XOR-decrypted entries buffer) instead of a real string — that's the architectural
+reason it returns 0 no matter what upstream registers we patch.** The function fails whenever
+`haystack[strcspn(haystack,charset)]` is the NUL terminator; our entries buffer's first byte is
+literally `0x00`, so it fails on the very first check, deterministically.
+
+**This is a different kind of finding than every prior blocker.** All the blockers so far (P2
+offsets, `FLAG_X`, the decrypt-loop count, etc.) were "some slot is uninitialized — write a
+plausible value into it." This one can't be solved that way: the function needs *real string
+data* (a class name, a method signature) to tokenize, and the raw entries buffer just isn't that
+— no register patch changes that fact. Two candidate next directions, both requiring tracing
+NEW territory (documented in NEXT-BLOCKER.md's session 19 section):
+1. The entry-decrypt XOR's key/nonce buffer (`0x1203a314`'s shared stack arg) may itself be
+   uninitialized — if so, fixing it might make the entries decrypt into genuinely readable text,
+   which could BE what this tokenizer wants.
+2. Or trace back further to `0x12037c18`'s own caller to see what `r0` is really meant to be.
+
+**Also this session:** a second `.37` attempt made real progress (XTV's own `libexec.so`/
+`ijiami.dat` extracted on-device, per its report) but its SSH service died mid-transfer and never
+recovered within the session — files are sitting ready on-device (`/htv/libexec_xtv.so`,
+`/htv/ijiami_xtv.dat`) for a clean single-shot pull next time SSH access is back. See
+SESSION-2026-07-29.md's "Session 18 (.37 track)" section for the full corrupted-transfer/pinned-
+paramiko-version details.
+
+## TL;DR (session 18 — 2026-07-29 ~21:20)
 
 **Traced session 17's null-`className` bug one level deeper: it's blocked on an unexplored
 parser/utility function, `0x12026d74`, that returns 0 (failure) even with fully legitimate args.**

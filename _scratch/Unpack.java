@@ -1225,7 +1225,7 @@ public class Unpack extends AbstractJni {
             for (long[] range : new long[][]{{0x12037090L, 0x60}, {0x12037b40L, 0xa0}, {0x12037a80L, 0x60},
                     {0x12037860L, 0x60}, {0x120379d0L, 0xb0}, {0x120370e0L, 0x80},
                     {0x1201e378L, 0x180}, {0x12037c18L, 0x60}, {0x1203a2c0L, 0x140}, {0x12037c50L, 0x180},
-                    {0x12037dc8L, 0xa0}, {0x120378a0L, 0x40}}) {
+                    {0x12037dc8L, 0xa0}, {0x120378a0L, 0x40}, {0x12026d74L, 0x100}}) {
                 try {
                     long ea = range[0];
                     int len = (int) range[1];

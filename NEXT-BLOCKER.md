@@ -1,5 +1,70 @@
 # Next Blocker — XuperPlugin portalCore
 
+## Status (2026-07-29 session 19 — `0x12026d74` disassembled: it's a strcspn-style text tokenizer, and we're feeding it binary, not text)
+
+**Disassembled `0x12026d74` (ground truth, capstone on `.40`).** It's a small tokenizer:
+```
+0x12026d80: mov r5,r0        ; r5 = haystack string ptr (our arg0)
+0x12026d82: cbnz r0,#0x12026d88   ; if r0 non-null, use it directly as the string
+0x12026d88: mov r0,r5; mov r1,r6; blx #0x1207b6f0   ; strcspn(haystack, charset) -> offset
+0x12026d90: ldrb r1,[r5,r0]  ; byte at haystack[offset]
+0x12026d92: cbz r1,#0x12026dae    ; if that byte is the NUL terminator -> FAIL, return 0
+0x12026d94: add r5,r0; mov r1,r6; mov r0,r5; blx #0x1207b700   ; another strcspn-like call
+...
+0x12026dae: movs r5,#0       ; fail path
+0x12026db0: mov r0,r5        ; return r5 (0 on fail)
+```
+`0x1207b6f0`/`0x1207b700` are real `strcspn`-shaped helpers (haystack, delimiter-charset →
+offset). The function fails (**returns 0**) whenever the character at `haystack[offset]` is the
+string's NUL terminator — i.e., whenever the delimiter charset is never found before the string
+ends. **Our call passes `r0 = 0x12240484` — the raw XOR-decrypted entries buffer** (binary data,
+first 4 bytes all `0x00`) **as if it were a null-terminated C string.** Since its very first byte
+IS `0x00`, `strcspn` returns `0` immediately, `haystack[0]` is the NUL byte itself, and the
+function fails on its very first check — deterministically, regardless of any register-level
+patch we make to counts or pointers upstream.
+
+**This is an architecture-level finding, not another single-offset bug:** the entries buffer is
+binary data (encrypted `0x10`-byte structs), not text. Whatever is SUPPOSED to feed this
+tokenizer is a **real, separately-stored string** (a class name or method signature, presumably
+produced by fully-correct decryption/parsing of the entries buffer, or read from an entirely
+different location we haven't found) — not the raw buffer itself. This suggests the
+"cheap-fix-first, stub-and-move-on" strategy that solved every prior blocker this project has
+reached its natural limit: getting real, correct **string data** flowing (not just "the call
+didn't crash and returned non-zero") likely requires either (a) finding where a real string
+buffer should have been populated upstream (a step we haven't located yet — possibly by the
+decrypt loop's true, uncorrupted output if the *actual* XOR key/count were used, not our
+hand-forced `sl=6`/`r5=2` approximations), or (b) tracing back further to whatever passes the
+*correct* first argument into this whole `0x12037c18` mega-function to begin with.
+
+Full log: [`SESSION-2026-07-29.md`](SESSION-2026-07-29.md) ("Session 19" section). Handoff:
+[`HANDOFF.md`](HANDOFF.md).
+
+### Next steps (ordered) — session 20
+1. **Check the shared key/nonce buffer feeding the entry-decrypt XOR** (`0x1203a314`'s `r2` arg,
+   noted in session 16 as "same stack addr `0xe4fff528` every call") — dump its contents. If it's
+   itself uninitialized/wrong (same "garbage stack slot" pattern as everything else this
+   project), fixing THAT could make the entries buffer decrypt into genuinely readable text,
+   which may be exactly what this tokenizer expects, rather than needing an entirely separate
+   string source.
+2. Failing that, trace what calls into `0x12037c18` (the giant enclosing function) and with what
+   `r0` argument — that's never been established; everything analyzed so far treated `0x12037c18`
+   as the starting point without confirming what its real caller intends for `r0`/entries data to
+   represent semantically.
+3. Dump `r6` (`0x1208ccf0`, the "format/charset" argument passed to the tokenizer) as a C-string
+   — knowing the actual delimiter characters it's searching for may clarify what kind of string
+   (a class name with `/` separators? a method signature with `(...)`?) is expected here.
+4. Once real string data flows through, confirm the method table gets populated, `FindClass`
+   succeeds, and `RegisterNatives` fires (`0x120379d0`-`0x12037a80`, offset `0x35c`).
+5. `N.b2b(ijiami.dat)` → decrypted DEX → `scripts/analyze_decrypted_dex.py` → DES key + portal
+   domain → plugin probe.
+
+### Do NOT (session 19 additions)
+- Don't try more register/memory patches on `0x12026d74`'s inputs expecting them to "just work" -
+  the failure is architectural (binary data fed to a text function), not an uninitialized-slot
+  bug like every previous blocker. Trace where real string data should come from instead.
+
+---
+
 ## Status (2026-07-29 session 18 — root cause of the null className fully traced to an unexplored parser function returning failure)
 
 **Traced the null-className bug one level deeper than session 17 left it.** The malloc'd
