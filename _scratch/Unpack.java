@@ -1455,6 +1455,25 @@ public class Unpack extends AbstractJni {
                     (byte)0x1E, (byte)0xFF, (byte)0x2F, (byte)0xE1  // BX LR
                 });
 
+                // Session 23: single-address hook (cheap, no wide-range corruption risk)
+                // counting every dispatch through the fake vtable stub, active for the
+                // whole run (not gated by jniPhase). Answers: does N.l/b2b ever actually
+                // call through SINGLETON2 at all, and from where (LR = caller site)?
+                final int[] singleton2Hits = new int[1];
+                backend.hook_add_new(new CodeHook() {
+                    public void hook(Backend b, long address, int size, Object user) {
+                        int n = ++singleton2Hits[0];
+                        if (n <= 30) {
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                            System.out.println(">>> [SINGLETON2 dispatch #" + n + "] called from LR=0x"
+                                    + Long.toHexString(lr));
+                        }
+                    }
+                    public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                    public void detach() {}
+                }, SINGLETON2, SINGLETON2, null);
+                System.out.println(">>> SINGLETON2 dispatch-count hook installed");
+
                 // Write the SINGLETON address into the binary's pointer table so code that loads
                 // from 0x12082340 gets a struct pointer (not the BX LR stub address).
                 byte[] singDataPtr = new byte[] {
@@ -1623,7 +1642,12 @@ public class Unpack extends AbstractJni {
                     public boolean hook(Backend b, long address, int size, long value, Object user,
                             EventMemHook.UnmappedType type) {
                         if (type == EventMemHook.UnmappedType.Fetch) {
-                            if (fetchCount[0]++ >= 50) {
+                            // Session 23: the cap of 50 was cutting off a walk (0x7b290-0xad000,
+                            // ~50 pages) mid-stream, causing UC_ERR_FETCH_UNMAPPED at 0x120381c1
+                            // which unidbg then reports as N.l returning a garbage -1 — NOT a real
+                            // decrypt-failure sentinel. Raised to 300, still well under the ~2000
+                            // on-demand-mapping count that was found to corrupt Unicorn internals.
+                            if (fetchCount[0]++ >= 1500) {
                                 System.out.println(">>> [EventMemHook] FETCH LIMIT REACHED (" + fetchCount[0] + "), NOT mapping");
                                 return false;
                             }
@@ -1643,6 +1667,26 @@ public class Unpack extends AbstractJni {
                                 UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
                         } catch (Throwable t) {
                             // page already mapped or overlapping; skip
+                        }
+                        // Session 23: canary read never failed across 300 fetches (every 10th
+                        // checked) yet N.l still dies with UC_ERR_FETCH_UNMAPPED at 0x120381c1
+                        // (inside that same page) right when the FETCH LIMIT trips. Data reads
+                        // succeeding while an instruction fetch fails points at something
+                        // un-mapping/un-EXEC'ing this page specifically for code fetch, possibly
+                        // repeatedly (session 21 saw "secondary loader" do this once already).
+                        // Force it back to mapped+RWX continuously, not just once before N.l.
+                        if (fetchCount[0] % 10 == 0) {
+                            try {
+                                b.mem_map(0x12038000L, 0x1000L,
+                                    UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                            } catch (Throwable t) { /* already mapped, expected */ }
+                            try {
+                                b.mem_protect(0x12038000L, 0x1000L,
+                                    UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                            } catch (Throwable t) {
+                                System.out.println(">>> [canary] re-protect 0x12038000 FAILED at fetchCount="
+                                        + fetchCount[0] + ": " + t);
+                            }
                         }
                         return true;
                     }
@@ -2179,6 +2223,7 @@ public class Unpack extends AbstractJni {
                 }
 
                 System.out.println(">>> calling N.l(Application, path) ...");
+                System.out.println(">>> SINGLETON2 dispatch count before N.l: " + singleton2Hits[0]);
                 boolean nOk = false;
                 // Disable walk trace hooks during N.l to avoid Unicorn internal corruption
                 // from too many CodeHook callbacks during deep recursive decryption.
@@ -2194,6 +2239,7 @@ public class Unpack extends AbstractJni {
                     System.out.println(">>> N.l threw: " + t);
                 }
                 jniPhase[0] = savedJniPhase;
+                System.out.println(">>> SINGLETON2 dispatch count after N.l: " + singleton2Hits[0]);
 
                 // Session 23: re-check the SINGLETON bytes we force-wrote pre-N.l.
                 // If N.l did any real init, these should differ from our fake BX-LR-stub
@@ -2244,10 +2290,12 @@ public class Unpack extends AbstractJni {
                 // b2b([BI)[B takes the raw ijiami.dat bytes directly — it may not
                 // depend on state that l() sets up, so a failed l() shouldn't block it.
                 System.out.println(">>> calling b2b regardless of N.l result (nOk=" + nOk + ") ...");
+                System.out.println(">>> SINGLETON2 dispatch count before b2b: " + singleton2Hits[0]);
                 try {
                     DvmObject<?> byteArray = new ByteArray(vm, ijiamiBytes);
                     DvmObject<?> b2bResult = N.callStaticJniMethodObject(emulator,
                             "b2b([BI)[B", byteArray, ijiamiBytes.length);
+                    System.out.println(">>> SINGLETON2 dispatch count after b2b: " + singleton2Hits[0]);
                     if (b2bResult instanceof ByteArray) {
                         byte[] dexBytes = ((ByteArray) b2bResult).getValue();
                         System.out.println(">>> b2b returned byte["+dexBytes.length+"]");
