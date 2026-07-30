@@ -1,5 +1,59 @@
 # Next Blocker — XuperPlugin portalCore
 
+## Status (2026-07-29 session 17 — decrypt-loop bypassed; REACHED REAL `FindClass` for the first time; null className pinpointed to an unpopulated malloc'd method-table field)
+
+**Biggest milestone yet: execution now reaches unidbg's REAL, built-in `FindClass` JNI implementation** (`DalvikVM$3`, via a genuine interrupt-based call trampoline at `PC=unidbg@0xfffe00b4`) — the first time ANY run in this project has gotten past all the fake-vtable-object anti-tamper gates into actual DVM/JNI bridge activity.
+
+**Fix applied to clear the session16 decrypt-loop blocker:**
+1. `sl`(r10) forced to `6` right after `asr.w sl,r6,#4` at `0x12037dac` (hook the NEXT instruction, `0x12037db0` — hooking `0x12037dac` itself fires before `asr.w` executes and gets overwritten). Bounds the per-entry XOR-decrypt loop to the ~2 plausible real entries instead of ~12,700 bogus ones.
+2. A **second, trailing** call to the same decrypt routine at `0x12037dce` (`mov r1,r5; bl 0x1203a314`) reuses the stale `r5` "remaining bytes" countdown as a byte-length argument — with `sl` truncated early, `r5` is still a huge leftover value, so this call also walks off the buffer. **Do NOT** fix this by zeroing `r5` itself (tried first, broke a *later* legitimate reuse of `r5` at `0x12037e0a` as an argument to a real string-table resolver `bl 0x12026d74`, corrupting downstream JNI setup). **Correct fix:** zero only `r1` at the call site (`0x12037dce`, after `mov r1,r5` already copied it, before `bl` executes) — leaves `r5` itself untouched for its later use.
+
+**With both fixes, the decrypt-loop region is now fully clear** (confirmed via `[walk2]` trace reaching `0x12038146`-`0x1203815c`, then `[walk]` reaching `0x120378aa`-`0x120378c2` in the outer caller — new territory).
+
+**New blocker — precisely diagnosed, not yet fixed:** at `0x120378aa`-`0x120378c2` (ground-truth disasm, not guesses):
+```
+0x120378aa: ldr r0,[r4]          ; r4 = REAL JNIEnv (0xfffe12a0-ish, unidbg-internal - NOT our P2!)
+0x120378ac: ldr r2,[r0,#0x18]    ; r2 = REAL FindClass fn ptr (0xfffe00b0, matches JNI spec offset 0x18)
+0x120378ae-b2: (GOT chain) sb=*(0x12082340)=P1(sa); r0=*(sb)=P2 (0x120868f0)
+0x120378ba: ldr r0,[r0,#0x18c]   ; r0 = *(P2+0x18c) = a malloc(0x3c) pointer (allocated earlier at
+                                  ; 0x12037c50-56, size 0x3c = exactly 6× JNINativeMethod structs
+                                  ; {name,sig,fnPtr} @ 0xc bytes each - matches our sl=6!)
+0x120378be: ldr r1,[r0,#4]       ; r1 = *(malloc_ptr+4) = the className arg for FindClass - NULL,
+                                  ; because nothing ever wrote real data into this malloc'd buffer
+0x120378c0: mov r0,r4             ; r0 = real env
+0x120378c2: blx r2                ; FindClass(env, className=NULL) -> crash in DalvikVM$3
+```
+**Root cause:** the malloc'd `0x3c`-byte buffer at `P2+0x18c` is almost certainly the REAL native-method table (6 `JNINativeMethod` entries — matches the 6 decrypted entries exactly), but the code between the decrypt loop (`0x12037dc8`) and this `FindClass` call (`0x120378aa`) — which calls `0x12026d74`, `0x1203f9b0`, `0x1207b630` (×2), `0x1207b400` (×3) — is presumably responsible for transforming the raw decrypted entries into real name/signature/fnPtr pointers written into that malloc'd buffer, and it never got there (or got there with wrong inputs) because of our sl/r1 truncation, or because those calls themselves hit more fake/unpopulated objects we haven't found yet. **Not yet traced.**
+
+Full log: [`SESSION-2026-07-29.md`](SESSION-2026-07-29.md) ("Session 17" section). Handoff: [`HANDOFF.md`](HANDOFF.md).
+
+### Next steps (ordered) — session 18
+1. Trace the transformation chain between the decrypt loop exit (`0x12037dc8`) and the
+   `FindClass` call (`0x120378aa`) live — register-dump hooks at `0x12026d74` (entry args),
+   `0x1203f9b0`, and both `0x1207b630`/`0x1207b400` call sites (same methodology as every fix
+   this project) to see which one is supposed to write the real name string pointer into
+   `P2+0x18c+4` and why it isn't.
+2. Alternative/parallel-cheap check: dump `*(P2+0x18c)` (the malloc'd 0x3c-byte buffer) in full
+   right before the `FindClass` call — if ALL of it is zero (not just offset+4), the transform
+   never ran or ran with a null source; if only some fields are zero, it's a partial/ordering bug.
+3. Once `FindClass` gets a real className, it should resolve `s/h/e/l/l/N` (or similar) and let
+   `RegisterNatives` finally run for real — confirm via the walk trace reaching
+   `0x120379d0`-`0x12037a80` (never yet observed reached in this project) and via `N.l`/`N.b2b`
+   resolving (the `IllegalArgumentException: find method failed` should finally stop appearing).
+4. `N.b2b(ijiami.dat)` → decrypted DEX → DES key + portal domain → plugin probe. The dry-run
+   pipeline for this step is already built and tested: `scripts/analyze_decrypted_dex.py`
+   (session16 DES-prep track) — point it at `/tmp/apkx/app_decrypted.dex` once it exists.
+
+### Do NOT (session 17 additions)
+- Don't zero `r5` itself to fix the trailing-decrypt-call crash — it's reused legitimately right
+  after (`0x12037e0a`) as an argument to a real string/table resolver; zero only `r1` at the call
+  site instead (`0x12037dce`), after the `mov r1,r5` copy already happened.
+- Don't assume `r0=0x12082340` seen right before the `FindClass` `blx` is the className arg — it's
+  an intermediate GOT-chain value (`sb`/P1), overwritten again before the real args (`r0`=env,
+  `r1`=className) are set. Read `r1` specifically for the className pointer.
+
+---
+
 ## Status (2026-07-29 session 16 — `0x12037c18` REALLY fixed; new blocker is a self-decrypting native-method table with a bogus iteration count)
 
 **`bl 0x12037c18` (session15d/e's blocker) is fully cleared, for real** — not a second fake

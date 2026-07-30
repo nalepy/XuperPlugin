@@ -706,6 +706,81 @@ public class Unpack extends AbstractJni {
             public void detach() {}
         }, 0x1203a36eL, 0x1203a36eL, null);
 
+        // Session 17: cheapest-first fix per NEXT-BLOCKER.md session16 recommendation #1.
+        // 0x12037dac: `asr.w sl, r6, #4` computes the decrypt-loop's iteration bound from an
+        // obfuscated size (fed ultimately from sp+0x20 at function entry, not yet traced back).
+        // Real data at the entries buffer (0x12240484) only has ~2 plausible real entries
+        // (index 4 has a real in-module pointer 0x120112e8; index 5 looks like an end sentinel
+        // 0xfffffff0 pattern) - the computed sl is ~12,700x too large. `asr.w` is a 4-byte
+        // Thumb-2 instruction, so hook the NEXT address (0x12037db0, `movs r6,#0`) - hooking
+        // 0x12037dac itself fires BEFORE asr.w executes and our forced value would just get
+        // overwritten by it.
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0]) return;
+                long before = backend.reg_read(ArmConst.UC_ARM_REG_R10).longValue();
+                backend.reg_write(ArmConst.UC_ARM_REG_R10, 6L);
+                if (n++ < 4) {
+                    System.out.println(">>> [17] sl(r10) forced: was 0x" + Long.toHexString(before) + " -> 6");
+                }
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x12037db0L, 0x12037db0L, null);
+        // After the (now-bounded) fixed-size loop exits, disasm shows a SECOND, trailing call to
+        // the same decrypt routine at 0x12037dce: `add r2,sp,#0x128; mov r0,r4; mov r1,r5; bl
+        // 0x1203a314` - this time r1=r5, the "remaining bytes" countdown register that was
+        // decremented alongside our forced sl loop but never reset (started from the same wrong
+        // huge size). r4 is left at buffer+6*0x10=0x122404e4 (right where the earlier crash was).
+        // IMPORTANT (session 17 correction): r5 is used AGAIN right after this, at 0x12037e0a
+        // (`mov r0,r5`) as an argument to a real string/class-table resolver (`bl 0x12026d74`) -
+        // forcing r5 itself to 0 earlier (first attempt) corrupted THAT call too, producing a
+        // null className passed into a REAL FindClass call further downstream (DalvikVM$3,
+        // unidbg's real FindClass implementation, crashed on Pointer.getString() of a null arg).
+        // Surgical fix: hook AFTER the `mov r1,r5` at 0x12037dcc has already copied r5 into r1
+        // (i.e. hook the `bl` itself, 0x12037dce) and zero ONLY r1 there - r5 is left completely
+        // untouched for its later, legitimate use.
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0]) return;
+                long before = backend.reg_read(ArmConst.UC_ARM_REG_R1).longValue();
+                backend.reg_write(ArmConst.UC_ARM_REG_R1, 0L);
+                if (n++ < 4) {
+                    System.out.println(">>> [17] trailing-decrypt call arg r1 forced: was 0x"
+                            + Long.toHexString(before) + " -> 0 (r5 left untouched)");
+                }
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x12037dceL, 0x12037dceL, null);
+
+        // The crash moved further! Now hits DalvikVM$3 (unidbg's REAL FindClass) with a null
+        // className, via an interrupt at PC=unidbg@0xfffe00b4, LR=0x120378c5. That LR sits right
+        // after a `ldr r0,[r4]; ldr r2,[r0,#0x18]; ...; blx r2` sequence around 0x120378aa-b2
+        // (per the much-earlier 0x12037878 disasm) - dump every register there to see whether
+        // this is genuinely calling through the real env (r4 = real JNIEnv, not our P2) and what
+        // r1 (would-be className arg) actually is at the call site.
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 6) return;
+                StringBuilder sbh = new StringBuilder(">>> [FindClass-site] regs @0x" + Long.toHexString(address) + ":");
+                int[] regs = {ArmConst.UC_ARM_REG_R0, ArmConst.UC_ARM_REG_R1, ArmConst.UC_ARM_REG_R2,
+                        ArmConst.UC_ARM_REG_R3, ArmConst.UC_ARM_REG_R4, ArmConst.UC_ARM_REG_R5,
+                        ArmConst.UC_ARM_REG_R6, ArmConst.UC_ARM_REG_LR};
+                String[] names = {"r0","r1","r2","r3","r4","r5","r6","lr"};
+                for (int i = 0; i < regs.length; i++) {
+                    long v = backend.reg_read(regs[i]).longValue();
+                    sbh.append(' ').append(names[i]).append("=0x").append(Long.toHexString(v));
+                }
+                System.out.println(sbh);
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x120378aaL, 0x120378b2L, null);
+
         // Wide execution trace: log every DISTINCT address actually executed across the whole
         // span from our vtable fix to the kill() block, in visit order. This reconstructs the
         // real path in one run instead of bisecting address-by-address across many round trips.
@@ -1029,7 +1104,8 @@ public class Unpack extends AbstractJni {
             // Post-call decrypted-code dumps for offline capstone disasm (ctors have run by now).
             for (long[] range : new long[][]{{0x12037090L, 0x60}, {0x12037b40L, 0xa0}, {0x12037a80L, 0x60},
                     {0x12037860L, 0x60}, {0x120379d0L, 0xb0}, {0x120370e0L, 0x80},
-                    {0x1201e378L, 0x180}, {0x12037c18L, 0x60}, {0x1203a2c0L, 0x140}, {0x12037c50L, 0x180}}) {
+                    {0x1201e378L, 0x180}, {0x12037c18L, 0x60}, {0x1203a2c0L, 0x140}, {0x12037c50L, 0x180},
+                    {0x12037dc8L, 0xa0}, {0x120378a0L, 0x40}}) {
                 try {
                     long ea = range[0];
                     int len = (int) range[1];

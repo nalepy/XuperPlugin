@@ -4,7 +4,37 @@ For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md),
 [SESSION-2026-07-29.md](SESSION-2026-07-29.md) first.
 
-## TL;DR (session 16 — 2026-07-29 ~20:50) — READ THIS FIRST
+## TL;DR (session 17 — 2026-07-29 ~21:00) — READ THIS FIRST
+
+**Biggest milestone yet: reached unidbg's REAL `FindClass` implementation** (`DalvikVM$3`) for
+the first time in this whole project — past every fake-vtable/anti-tamper gate, into actual
+DVM/JNI bridge activity.
+
+**Session16's decrypt-loop blocker cleared** with two fixes in `_scratch/Unpack.java`:
+1. `sl`(r10) forced to `6` right after it's computed (hook `0x12037db0`, the instruction AFTER
+   `asr.w sl,r6,#4` at `0x12037dac` — hooking `0x12037dac` itself fires too early and gets
+   overwritten by the instruction it's supposed to patch).
+2. A trailing second call to the same decrypt routine (`0x12037dce`) reuses the leftover `r5`
+   "remaining bytes" register as a byte-length arg — **zero only `r1` at the call site**, not
+   `r5` itself (zeroing `r5` broke its later legitimate reuse at `0x12037e0a` as an arg to a real
+   string-table resolver, corrupting downstream JNI setup in a way that was hard to notice at
+   first — a good lesson: don't clobber a register just because it's the wrong value at ONE use
+   site if it's reused later for something unrelated).
+
+**New blocker, precisely diagnosed:** `FindClass(env, className)` is called for real (ground-truth
+disasm confirms real JNIEnv `r4`≈`0xfffe12a0`, real fn ptr from JNIEnv+0x18) but `className`
+(`r1`) is NULL. It's read from `*(malloc'd-0x3c-byte-buffer + 4)` — that buffer (allocated at
+`0x12037c50-56`, stored at `P2+0x18c`) is almost certainly the real native-method table (0x3c =
+6× `JNINativeMethod` structs, matching our `sl=6` exactly) but nothing has written real
+name/sig/fnPtr data into it yet. The transform chain between the decrypt loop and this call
+(`0x12026d74`, `0x1203f9b0`, `0x1207b630`×2, `0x1207b400`×3) hasn't been traced — that's the
+session 18 starting point. Full disasm + exact next steps in NEXT-BLOCKER.md's session 17 section.
+
+**Bonus, already ready:** the DES/portal-host analysis pipeline (`scripts/analyze_decrypted_dex.py`,
+built and tested by a concurrent session against real TeleLatino DEX + the plugin's own source)
+is sitting ready to point at `/tmp/apkx/app_decrypted.dex` the moment `N.b2b` finally returns it.
+
+## TL;DR (session 16 — 2026-07-29 ~20:50)
 
 **`0x12037c18` (session15d/e's blocker) genuinely cleared.** Session15d/e's "second fake object
 via a different GOT slot" theory was **wrong** — live register-dump hooks proved `sb`(r9)
