@@ -1,4 +1,20 @@
-# Next Blocker — guest-code disasm exhausted along this path; mprotect likely host-side (unidbg), not guest ARM code
+# Next Blocker — cheap short-circuit test ruled out; only path forward is host-level (Java) instrumentation
+
+## Update (session 23 part 12) — entry-counter data kills the "short-circuit the 2nd call" idea
+
+Tried the cheapest test first, as planned: added a single-address `CodeHook` at `0x120381c0` (the crashing function's own entry) to count successful entries and log each one's `LR` (caller). Result:
+
+```
+>>> [fn@0x120381c0 entry #1] called from LR=0xffff0000
+```
+
+**Only one successful entry, ever** — confirming the "re-entry" theory. But its `LR` is `0xffff0000`, a synthetic sentinel, not a real guest-code address — this is the harness's own top-level JNI dispatch calling `N.l()` directly from Java (via `N.callStaticJniMethodBoolean`), not a normal `bl`/`blx` from other ARM code. So this is the *original*, first-ever call into this function, not a recursive self-call from within its own body as part 9 assumed.
+
+**A `CodeHook` architecturally cannot catch the second (failing) entry** — Unicorn throws the permission fault *before* any fetch-time hook can fire at that PC, so there is no way to log the second entry's caller directly.
+
+**Fallback: searched all ~4KB of already-captured bytes from this session for any direct `bl`/`blx`/`b` instruction targeting `0x120381c0`.** Wrote `_scratch/find_caller.py`, checked all 12 dumps (window`[0x180:0x300]`, all 3 part-9 candidates, all 6 part-11 internal callees) — **found nothing**. The second call isn't in any code we've disassembled so far.
+
+**Conclusion**: the cheap short-circuit idea doesn't have an implementation path with what we currently know — we can't intercept the failing fetch, and we don't have the caller's address to intercept instead. This doesn't contradict part 11's "host-side mprotect" theory; it's consistent with it. Confirms the next real step is host-level (Java/unidbg) instrumentation, not more guest-code hunting — there's no cheap guest-code trick left to try.
 
 ## Update (session 23 part 11) — 7-agent sweep of the whole remaining call graph, mprotect not found in guest code
 

@@ -1511,6 +1511,30 @@ public class Unpack extends AbstractJni {
                 }, SINGLETON2, SINGLETON2, null);
                 System.out.println(">>> SINGLETON2 dispatch-count hook installed");
 
+                // Session 23 part 12: cheap, single-address entry counter at 0x120381c0 (the
+                // function whose re-entry crashes with UC_ERR_FETCH_PROT once its page loses
+                // EXEC). A CodeHook only fires on a SUCCESSFUL fetch, so this can only ever
+                // count successful entries — but that's exactly what we need: hard data on how
+                // many times this function is entered successfully, and each entry's caller
+                // (LR), before whichever entry fails. If it turns out to be called more than
+                // once successfully, the caller pattern here tells us where the fix belongs.
+                final int[] fn381c0Hits = new int[1];
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        public void hook(Backend b, long address, int size, Object user) {
+                            int n = ++fn381c0Hits[0];
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                            System.out.println(">>> [fn@0x120381c0 entry #" + n + "] called from LR=0x"
+                                    + Long.toHexString(lr));
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x120381c0L, 0x120381c0L, null);
+                    System.out.println(">>> fn@0x120381c0 entry-counter hook installed");
+                } catch (Throwable t) {
+                    System.out.println(">>> fn@0x120381c0 entry-counter hook FAILED: " + t);
+                }
+
                 // Write the SINGLETON address into the binary's pointer table so code that loads
                 // from 0x12082340 gets a struct pointer (not the BX LR stub address).
                 byte[] singDataPtr = new byte[] {

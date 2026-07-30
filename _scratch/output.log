@@ -641,7 +641,7 @@ INFO com.github.unidbg.linux.AndroidElfLoader - libexec.so load dependency liban
 stack corruption detected
 [crash]A/libc: stack corruption detected
 exit with code: 1
->>> REAL_JNI returned: 0x1 (66361539690497)
+>>> REAL_JNI returned: 0x1 (69037304315905)
 >>> DECRYPTED@0x12037090: 2846984788b10a3840f2ff12c11700ebd1519143401a411c4843404300f003000028fdd14ff0ff3409e00c48784400680068016c28468847009800f0d5fb30680199884201bf204602b05df804bbf0bd44f016e904000100b6b2040080b20400
 >>> DECRYPTED@0x12037b40: a946002401e04ff0ff34d8f8000090f8090188b12046062180b44ff0250700df80bc4845494603d9454243f03aec05604ff47a70e6f7eefe00200921c8f80000204680b44ff0250700df80bc484503d9444243f026ec0460fede00bf00f0ffffaeaa0400acb00500a6a804008caa0400831b00000c520500fe5105006f1b0000ca510500bb5105005b1b000098510500741afeff451b0000745105006a510500
 >>> DECRYPTED@0x12037a80: 9047d9f800000069816e2046884701204be04548414d7844d0f80080d8f80000d0f8880100284bd03a2143f07aed002846d080b44ff0140700df80bc0446a946a84242d9a4f1560001b2c1f34951014401f47c41401a00b2411c414340000130
@@ -676,9 +676,10 @@ exit with code: 1
 >>> SINGLETON data: byte[0x7f002138] = 0x0030007f
 >>> SINGLETON data: byte[0x7f002000] = 0x0021007f
 >>> SINGLETON2 dispatch-count hook installed
+>>> fn@0x120381c0 entry-counter hook installed
 >>> FORCE-WROTE singleton/vtable
 >>> ijiami.dat size=4560834
->>> mock app: android.app.Application@3d285d7e
+>>> mock app: android.app.Application@40005471
 >>> PAGE@0x12038000 before N.l: 4f4f0500584f05005b4f0500564f0500514f05004d4f05004c4f05004aac4ff48071204643f05ce900962046584a4ff48071059b7a44fff727fa204643f058e9
 >>> PAGE@0x12038000 re-protected EXEC before N.l
 >>> PAGE@0x12038000 window[0x200:0x300]: 11b0bde8000f08bff0bd43f082e8c84851462a467844d0f800b0dbf800000069436ec44878449847dbf80000012180f81111c14a7a441178002900f0d1800b9203f086f9284602f0b3f8dbf8001081f880002846b9497944fff7d0f9dbf80010b0fa80f0400981f8ec00d1f8a400006880475046e6f732fa10b10020cbf800005046294602f06cfa5046294602f0a2fa0028aad00446504602f0d6fa4ff000090028a4d00a902946daf80000426d50469047dbf80010c86008692146026e50469047dbf80010486408693146026e50469047dbf800108864d1f8b8018047fff701f8284602f0e2fa284602f037fcdbf8001081f8030192487844e6f747fa0028
@@ -726,27 +727,28 @@ exit with code: 1
 >>> pre-N.l probe @0x11ffe000 FAILED: com.github.unidbg.arm.backend.BackendException: mem_read address=0x11ffe000, size=16
 >>> calling N.l(Application, path) ...
 >>> SINGLETON2 dispatch count before N.l: 0
+>>> [fn@0x120381c0 entry #1] called from LR=0xffff0000
 >>> [38240] code: 03f086f92846
 >>> [38240] regs: r0=0x0 r1=0x20000000 r2=0x20000000 r3=0x200001f0 r4=0x40000000 r5=0x0 r6=0x0 r7=0x0 r8=0x410430f0 r9=0x0 r10=0x1203b53b r11=0x12038240 r12=0xe4ffa6b8 sp=0x0 lr=0x0 pc=0x746564206e6f6963
 >>> [scan-kill@0x1203767c] nuking scan call #1
 WARN com.github.unidbg.arm.AbstractARMEmulator - Fetch memory failed: address=0x7b290, size=4, value=0x0, PC=unidbg@0x7b290, LR=RX@0x12037689[libexec.so]0x37689
->>> [runaway-origin@0x7b290] hit #1 LR=0x12037689 r0=0x0 r1=0x1208d670 r2=0x0 r3=0x3d285d7e
+>>> [runaway-origin@0x7b290] hit #1 LR=0x12037689 r0=0x0 r1=0x1208d670 r2=0x0 r3=0x40005471
 >>> [scan-kill@0x1203767c] nuking scan call #2
->>> [runaway-origin@0x7b290] hit #2 LR=0x12037689 r0=0x0 r1=0x1208d350 r2=0x0 r3=0x3d285d7e
->>> [runaway-origin@0x7b290] hit #3 LR=0x12037689 r0=0x0 r1=0x1208d37a r2=0x0 r3=0x3d285d7e
->>> [runaway-origin@0x7b290] hit #4 LR=0x12037689 r0=0x0 r1=0x1208d390 r2=0x0 r3=0x3d285d7e
->>> [runaway-origin@0x7b290] hit #5 LR=0x12037689 r0=0x0 r1=0x1208d3b0 r2=0x0 r3=0x3d285d7e
->>> [runaway-origin@0x7b290] hit #6 LR=0x12037689 r0=0x0 r1=0x1208d3d0 r2=0x0 r3=0x3d285d7e
->>> [runaway-origin@0x7b290] hit #7 LR=0x12037689 r0=0x0 r1=0x1208d3f0 r2=0x0 r3=0x3d285d7e
->>> [runaway-origin@0x7b290] hit #8 LR=0x12037689 r0=0x0 r1=0x1208d410 r2=0x0 r3=0x3d285d7e
->>> [runaway-origin@0x7b290] hit #9 LR=0x12037689 r0=0x0 r1=0x1208d430 r2=0x0 r3=0x3d285d7e
->>> [runaway-origin@0x7b290] hit #10 LR=0x12037689 r0=0x0 r1=0x1208d460 r2=0x0 r3=0x3d285d7e
->>> [3a6a0] regs (r5 FORCED to SINGLETON2): r0=0x7f003000 r1=0x52f6c r2=0x7f0022d8 r3=0xe4ffa690 r4=0x3d285d7e r5=0x7f003000 r6=0x7f002100 r7=0xe4ffa6b0 r8=0x121b1ec0 sb(r9)=0x1 sl(r10)=0x7f002000 fp(r11)=0x7f002000 ip(r12)=0x12082590 lr=0x12037689 sp=0xe4ffa690 pc=0x1203a6a0
+>>> [runaway-origin@0x7b290] hit #2 LR=0x12037689 r0=0x0 r1=0x1208d350 r2=0x0 r3=0x40005471
+>>> [runaway-origin@0x7b290] hit #3 LR=0x12037689 r0=0x0 r1=0x1208d37a r2=0x0 r3=0x40005471
+>>> [runaway-origin@0x7b290] hit #4 LR=0x12037689 r0=0x0 r1=0x1208d390 r2=0x0 r3=0x40005471
+>>> [runaway-origin@0x7b290] hit #5 LR=0x12037689 r0=0x0 r1=0x1208d3b0 r2=0x0 r3=0x40005471
+>>> [runaway-origin@0x7b290] hit #6 LR=0x12037689 r0=0x0 r1=0x1208d3d0 r2=0x0 r3=0x40005471
+>>> [runaway-origin@0x7b290] hit #7 LR=0x12037689 r0=0x0 r1=0x1208d3f0 r2=0x0 r3=0x40005471
+>>> [runaway-origin@0x7b290] hit #8 LR=0x12037689 r0=0x0 r1=0x1208d410 r2=0x0 r3=0x40005471
+>>> [runaway-origin@0x7b290] hit #9 LR=0x12037689 r0=0x0 r1=0x1208d430 r2=0x0 r3=0x40005471
+>>> [runaway-origin@0x7b290] hit #10 LR=0x12037689 r0=0x0 r1=0x1208d460 r2=0x0 r3=0x40005471
+>>> [3a6a0] regs (r5 FORCED to SINGLETON2): r0=0x7f003000 r1=0x52f6c r2=0x7f0022d8 r3=0xe4ffa690 r4=0x40005471 r5=0x7f003000 r6=0x7f002100 r7=0xe4ffa6b0 r8=0x121b1ec0 sb(r9)=0x1 sl(r10)=0x7f002000 fp(r11)=0x7f002000 ip(r12)=0x12082590 lr=0x12037689 sp=0xe4ffa690 pc=0x1203a6a0
 >>> [3a6a0] code[-8..+40]: 706c6b468d6b2c497944a847daf8000090f8e21111b9806b806b8047274920467944fcf79fff20b9daf80000012180f8
 >>> [SINGLETON2 dispatch #1] called from LR=0x1203a6a5
 >>> [trace@SINGLETON2+0x0] R0=0x7f003000
 >>>   code: 1eff2fe1
->>> [6b0] regs (AFTER CBZ skip, pre-branch): r0=0x7f003000 r1=0x0 r2=0x7f0022d8 r3=0xe4ffa690 r4=0x3d285d7e r5=0x7f003000 r6=0x7f002100 r7=0xe4ffa6b0 r8=0x121b1ec0 sb(r9)=0x1 sl(r10)=0x7f002000 fp(r11)=0x7f002000 ip(r12)=0x12082590 lr=0x1203a6a5 sp=0xe4ffa690 pc=0x1203a6b0
+>>> [6b0] regs (AFTER CBZ skip, pre-branch): r0=0x7f003000 r1=0x0 r2=0x7f0022d8 r3=0xe4ffa690 r4=0x40005471 r5=0x7f003000 r6=0x7f002100 r7=0xe4ffa6b0 r8=0x121b1ec0 sb(r9)=0x1 sl(r10)=0x7f002000 fp(r11)=0x7f002000 ip(r12)=0x12082590 lr=0x1203a6a5 sp=0xe4ffa690 pc=0x1203a6b0
 >>> [6b0] code[0x1203a6a0..+64]: 7944a847daf8000090f8e21111b9806b806b8047274920467944fcf79fff20b9daf80000012180f8e311234920467944fcf794ffd8f80010019a914204bfbde8
 >>> [6b2] safety net: forced R0=0x7f003000
 >>> [SINGLETON2 dispatch #2] called from LR=0x1203a6b5
@@ -756,7 +758,7 @@ WARN com.github.unidbg.arm.AbstractARMEmulator - Fetch memory failed: address=0x
 >>> [SINGLETON2 dispatch #3] called from LR=0x12038273
 >>> [trace@SINGLETON2+0x0] R0=0x7f003000
 >>>   code: 1eff2fe1
-WARN com.github.unidbg.AbstractEmulator - emulate RX@0x120381c1[libexec.so]0x381c1 exception sp=unidbg@0xe4ffa670, msg=unicorn.UnicornException: Fetch from non-executable memory (UC_ERR_FETCH_PROT), offset=8ms @ Runnable|Function32 address=0x120381c1, arguments=[unidbg@0xfffe12a0, 1064202203, 1026055550, 1709804316]
+WARN com.github.unidbg.AbstractEmulator - emulate RX@0x120381c1[libexec.so]0x381c1 exception sp=unidbg@0xe4ffa670, msg=unicorn.UnicornException: Fetch from non-executable memory (UC_ERR_FETCH_PROT), offset=9ms @ Runnable|Function32 address=0x120381c1, arguments=[unidbg@0xfffe12a0, 1064202203, 1073763441, 1630678941]
 >>> N.l threw: java.lang.IllegalStateException: Invalid boolean value=-1
 >>> SINGLETON2 dispatch count after N.l: 3
 >>> post-N.l SINGLETON byte[0x7f0022e2]=0x00
