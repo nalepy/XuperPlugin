@@ -873,22 +873,91 @@ public class Unpack extends AbstractJni {
         // READ point instead (0x12037c64's `ldrd r5,r4,[sp,#0x20]`, confirmed reached - its
         // effects are visible in later diagnostics) and overriding the REGISTERS directly right
         // after the load, rather than the memory before it.
+        // Session 20 CORRECTION: live [3a314]/[3a36e] regdumps proved session18's "r4/r5=2 = real
+        // count" theory was WRONG. `ldrd r5,r4,[sp,#0x20]` loads r5=*(sp+0x20), r4=*(sp+0x24) - the
+        // exact two by-ref out-params (r3=&sp[0x20], r2=&sp[0x24]) our VTABLE_STUB no-ops at
+        // 0x12037c46-4c. The DECRYPT LOOP (0x12037db2-dc6) then uses r4 directly as the per-entry
+        // POINTER (`mov r0,r4; ...; adds r4,#0x10` each iteration) and r5 as a byte countdown - so
+        // sp+0x24/r4 is semantically the REAL ENTRIES BUFFER POINTER the (unimplemented) real
+        // callee was supposed to resolve, not a "count". Forcing r4=2 sent the loop walking
+        // 0x2,0x12,0x22,... (inside the null-absorb page, all-zero garbage) instead of the real
+        // buffer at 0x12240484 - confirmed live this session: entry@0x2/0x12/0x22/... bytes=all-00.
+        // Fix: set r4 to the REAL entries buffer base (0x12240484, stable across every session's
+        // dumps) and r5 to a real byte-length matching our sl=6 forced iteration count (6*0x10=0x60).
+        // Session 20 correction #2: live dump revealed the ldrd's NATURAL (unforced) values are
+        // NOT garbage at all - r4(sp+0x24)=0x12240484 (the real entries buffer - exactly right!)
+        // and r5(sp+0x20)=0x12201840 (a real in-module pointer, plausible legitimate data, not
+        // 0xffffffff garbage as session18 originally claimed). Something upstream of the
+        // VTABLE_STUB call already spills the correct values onto these stack slots - our stub
+        // "doing nothing" was actually fine; overriding r4/r5 here at all (session18's original
+        // r4=2 hack, and this session's first ENTRIES_BUF/0x60 attempt) was unnecessary and only
+        // risked clobbering already-correct state. Now PURE TRACE, no override, to see how the
+        // real unmodified values flow through the rest of the function.
+        final long ENTRIES_BUF = 0x12240484L;
         backend.hook_add_new(new CodeHook() {
             int n;
             public void hook(Backend b, long address, int size, Object user) {
                 if (!jniPhase[0]) return;
-                long r5before = backend.reg_read(ArmConst.UC_ARM_REG_R5).longValue();
-                long r4before = backend.reg_read(ArmConst.UC_ARM_REG_R4).longValue();
-                backend.reg_write(ArmConst.UC_ARM_REG_R5, 2L);
-                backend.reg_write(ArmConst.UC_ARM_REG_R4, 2L);
+                long r5 = backend.reg_read(ArmConst.UC_ARM_REG_R5).longValue();
+                long r4 = backend.reg_read(ArmConst.UC_ARM_REG_R4).longValue();
                 if (n++ < 4) {
-                    System.out.println(">>> [18] post-ldrd override: r5 was 0x" + Long.toHexString(r5before)
-                            + " r4 was 0x" + Long.toHexString(r4before) + " -> both forced to 2 (real count)");
+                    System.out.println(">>> [20] post-ldrd NATURAL (no override): r5=0x" + Long.toHexString(r5)
+                            + " r4=0x" + Long.toHexString(r4) + " (ENTRIES_BUF=0x" + Long.toHexString(ENTRIES_BUF) + ")");
                 }
             }
             public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
             public void detach() {}
         }, 0x12037c68L, 0x12037c68L, null);
+
+        // Session 20: investigate the anomaly first (per NEXT-BLOCKER.md session20 next-steps#0)
+        // - the 0x1203a314 entry-decrypt hook didn't fire at all in the wip run, despite firing
+        // every session19 run with "the same harness state otherwise". Trace the control-flow
+        // fork that decides this: the cbz r4 branch at 0x12037c5e (decrypt path 0x12037da4 vs
+        // "build string table" path 0x12037cac) happens BEFORE our r4/r5=2 override at 0x12037c68
+        // in program order, so it can't be caused by that override directly - but trace it live
+        // instead of assuming. Also dump r6 right as it enters the size-rounding formula
+        // (0x12037c74) and right before asr.w computes sl (0x12037dac), to see whether our
+        // r4/r5=2 override (which happens in between, at 0x12037c68) changed what THAT formula
+        // computes - if r6 comes out 0 or negative here, sl could end up <=0 and the loop body
+        // (which calls 0x1203a314) would never execute even with the sl-force hook still active.
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 4) return;
+                long r4 = backend.reg_read(ArmConst.UC_ARM_REG_R4).longValue();
+                System.out.println(">>> [20] cbz-r4 @0x12037c5e r4=0x" + Long.toHexString(r4)
+                        + (r4 == 0 ? " -> ZERO, taking build-string-table branch (0x12037cac)"
+                                   : " -> non-zero, falling through to decrypt path (0x12037da4)"));
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x12037c5eL, 0x12037c5eL, null);
+        addRegDump(backend, jniPhase, 0x12037c74L, "entry to size-rounding formula (r4=post-override)",
+                new int[]{ArmConst.UC_ARM_REG_R4});
+        backend.hook_add_new(new CodeHook() {
+            int n;
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0] || n++ >= 4) return;
+                long r6 = backend.reg_read(ArmConst.UC_ARM_REG_R6).longValue();
+                System.out.println(">>> [20] pre-asr @0x12037dac r6(pre-shift)=0x" + Long.toHexString(r6)
+                        + " (sl will be forced to 6 regardless by the existing 0x12037db0 hook,"
+                        + " but this shows what the REAL computed value would have been)");
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x12037dacL, 0x12037dacL, null);
+        // Unconditional (not gated <N) confirmation that the sl-force hook itself is reached -
+        // if this line is MISSING from the log, 0x12037db0 was never executed this run, meaning
+        // control flow diverged before it (most likely: the cbz r4 branch above went the OTHER
+        // way, into the string-table-building path which never reaches the decrypt loop at all).
+        backend.hook_add_new(new CodeHook() {
+            public void hook(Backend b, long address, int size, Object user) {
+                if (!jniPhase[0]) return;
+                System.out.println(">>> [20] REACHED 0x12037db0 (decrypt-loop entry) - confirms decrypt path taken");
+            }
+            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+            public void detach() {}
+        }, 0x12037db0L, 0x12037db0L, null);
 
         // Also: full 0x3c-byte dump of the malloc'd method-table buffer right before FindClass,
         // to see whether ANY of it got populated or the whole thing is still zero.
@@ -1238,7 +1307,8 @@ public class Unpack extends AbstractJni {
             for (long[] range : new long[][]{{0x12037090L, 0x60}, {0x12037b40L, 0xa0}, {0x12037a80L, 0x60},
                     {0x12037860L, 0x60}, {0x120379d0L, 0xb0}, {0x120370e0L, 0x80},
                     {0x1201e378L, 0x180}, {0x12037c18L, 0x60}, {0x1203a2c0L, 0x140}, {0x12037c50L, 0x180},
-                    {0x12037dc8L, 0xa0}, {0x120378a0L, 0x40}, {0x12026d74L, 0x100}}) {
+                    {0x12037dc8L, 0xa0}, {0x120378a0L, 0x40}, {0x12026d74L, 0x100},
+                    {0x1207b400L, 0x100}, {0x1207b630L, 0x100}, {0x1203f9b0L, 0x100}, {0x1208ccf0L, 0x40}}) {
                 try {
                     long ea = range[0];
                     int len = (int) range[1];

@@ -1,5 +1,102 @@
 # Next Blocker — XuperPlugin portalCore
 
+## Status (2026-07-29 session 20 — session18's r4/r5 override was corrupting the decrypt loop's real buffer pointer; fixed, tokenizer now succeeds, new blocker at `0x1207b400`)
+
+**Root cause found for the "hook stopped firing" anomaly flagged at the top of this session:**
+session18's `0x12037c68` hook (`ldrd r5,r4,[sp,#0x20]` → force `r5=2,r4=2`, meant to feed the
+"real count" into the entries-decrypt loop) was silently corrupting the loop's OWN buffer
+pointer. Ground truth via live register dumps:
+
+- `ldrd r5,r4,[sp,#0x20]` loads `r5=*(sp+0x20)`, `r4=*(sp+0x24)` — exactly the two by-reference
+  out-params (`r3=&sp[0x20]`, `r2=&sp[0x24]`) that the `P2+0x24/+0x38` `VTABLE_STUB` call
+  (`0x12037c46-4c`) was supposed to populate.
+- The very next code (`0x12037db2-dc6`, the decrypt loop) uses **`r4` directly as the
+  per-entry pointer** (`mov r0,r4; bl 0x1203a314; adds r4,#0x10`) and **`r5` as a byte-length
+  countdown** (`subs r5,#0x10`) — i.e. `sp+0x24`/`r4` IS semantically the real entries-buffer
+  pointer, not a "count" as session18 assumed.
+- Forcing `r4=2` sent the loop walking addresses `0x2, 0x12, 0x22, 0x32, 0x42, 0x52` (inside the
+  harness's null-absorb page, all zero bytes) instead of the real buffer — confirmed via live
+  `[3a314] entry@0x2/0x12/0x22/...: bytes=all-00` dumps, reproduced exactly once (session20-wip
+  commit); this, not a hook-registration fluke, is why `0x1203a314` "didn't fire" in one run and
+  fired-on-garbage in another — timing-dependent based on which values happened to be on the
+  stack.
+- **The natural (unforced) values at this exact point are already correct**: live dump with the
+  override removed shows `r4=0x12240484` (the real entries buffer — exactly right) and
+  `r5=0x12201840` (a real in-module pointer). Something upstream of the `VTABLE_STUB` no-op call
+  already spills legitimate values onto these stack slots — the call's real job is apparently
+  NOT what session18 assumed, and the stub doing nothing was fine all along. **Session18's
+  override was unneeded and actively harmful.**
+
+**Fix applied:** removed the `r4/r5` override at `0x12037c68` entirely (now a pure trace, no
+`reg_write`). Loop now walks the real buffer (`0x12240484` → `0x122404e4`, matching every prior
+session's raw dumps) with real decrypt-XOR applied.
+
+**Result — genuine forward progress:** `bl 0x12026d74` (the tokenizer session19 proved fails on
+literal-zero binary data) **now succeeds** on its first call this session: `r0=0x12240484` in,
+`r0=0x12240484` out (non-zero = success), instead of always returning `0` as in every prior
+session. The full downstream transform chain traced live:
+
+```
+bl 0x12026d74(0x12240484, fmt=0x1208ccf0, out=sp)     -> 0x12240484  (SUCCESS, first time ever)
+bl 0x1203f9b0(r4=0x12240484)                           -> 0x12240484  (pass-through, ok)
+blx 0x1207b630 #1 (r0=0x12240484, r1=0x12019b06)       -> 0x12240484  (ok)
+blx 0x1207b630 #2 (r0=0, r1=0x12019b06)                -> 0x0         (by design, r0=0 arg)
+blx 0x1207b400 #1 (r0=0x12240484, r1=0x1208ccfd)       -> 0xffffffff  (NEW BLOCKER — fails)
+```
+`0x1208ccfd` = format-string base (`0x1208ccf0`) `+0xd`. Live dump of `0x1208ccf0` (see
+`DECRYPTED@0x1208ccf0` in the session log) shows a short table of `/`-delimited path-like format
+strings: `\r\n\0s/h/e/l/l\0s/h/e/l/l/\0%sa8/p\0%s%s\0_x86.so\0\0\0\0` — offset `+0xd` lands
+mid-string around `s/h/e/l/l/\0` — plausibly the class-name/method-signature template the
+tokenizer/transform chain is assembling against.
+
+`0xffffffff` from `0x1207b400` is a classic "not found" sentinel (strchr/memchr-shaped). Its own
+code, dumped this session (`DECRYPTED@0x1207b400`/`0x1207b630`, `_scratch/Unpack.java`'s post-JNI
+dump list), is a repeating 16-byte-stride pattern (`00 c6 8f e2 XX ca 8c e2 YY f0 bc e5 d4 d4 d4
+d4`, embedded literal decreasing by `0xc` each entry) — looks like a small ARM-mode (not Thumb)
+veneer/dispatch table with ~14-16 entries, not a single straight-line function. Not yet properly
+disassembled with capstone — the byte dump is captured (in the harness's post-call dump list) but
+the actual instruction-level analysis is session 21's starting point.
+
+Full log: [`SESSION-2026-07-29.md`](SESSION-2026-07-29.md) ("Session 20" section). Handoff:
+[`HANDOFF.md`](HANDOFF.md).
+
+### Next steps (ordered) — session 21
+1. **Disassemble `0x1207b400`/`0x1207b630`** via capstone on `.40` (same technique as always —
+   bytes already captured in the harness's `DECRYPTED@0x1207b400`/`DECRYPTED@0x1207b630` dump
+   lines, no new unidbg run needed just for this). Given the repeating-16-byte-stride shape,
+   consider disassembling in **ARM mode, not Thumb** — the byte pattern doesn't look like typical
+   Thumb-2 encoding seen everywhere else in this binary.
+2. Once its real semantics are known, figure out why the call with `r0=0x12240484,
+   r1=0x1208ccfd` returns `0xffffffff` — likely either (a) it's a real strchr-style search over
+   the (still not fully "text") decrypted entry bytes for a delimiter that genuinely isn't
+   there yet (same underlying architecture-mismatch class of problem session19 found for
+   `0x12026d74`, just one level further down the chain), or (b) `r1=0x1208ccfd` (format string
+   offset `+0xd`) is the WRONG offset for this specific call — dump the exact bytes at that
+   address as a C-string and sanity-check it's what this call site should be searching for.
+3. Add register-dump hooks for the **2nd and 3rd** `0x1207b400` calls (only the 1st was traced
+   this session — `addRegDump` at `0x12037e46`/`0x12037e4a` in `_scratch/Unpack.java`) to see if
+   they behave differently now that real data flows through, and whether the chain would
+   eventually succeed if this first call's `0xffffffff` weren't fatal to it.
+4. Once the transform chain populates real name/sig/fnPtr into the malloc'd `P2+0x18c` table,
+   confirm `FindClass` gets a real className and `RegisterNatives` fires
+   (`0x120379d0`-`0x12037a80`, offset `0x35c`).
+5. `N.b2b(ijiami.dat)` → decrypted DEX → `scripts/analyze_decrypted_dex.py` → DES key + portal
+   domain → plugin probe.
+
+### Do NOT (session 20 additions)
+- Don't assume a `CodeHook`'s register-dump values reflect the function's real, unforced
+  semantics without first checking whether an EARLIER hook in the same call chain is overriding
+  registers those values depend on — session18's `r4/r5=2` override at `0x12037c68` silently
+  broke a completely different, unrelated-looking piece of code (the decrypt loop 20+ lines
+  later) because both reused the same physical registers for different logical purposes at
+  different points in the same function. Verify the NATURAL (unforced) value first before adding
+  any override, the way this session did.
+- Don't assume `0x1207b400`/`0x1207b630`'s repeating 16-byte-stride byte pattern is Thumb code
+  without checking — it doesn't match the Thumb-2 shape seen everywhere else in this binary and
+  may need ARM-mode disassembly.
+
+---
+
 ## Status (2026-07-29 session 19 — `0x12026d74` disassembled: it's a strcspn-style text tokenizer, and we're feeding it binary, not text)
 
 **Disassembled `0x12026d74` (ground truth, capstone on `.40`).** It's a small tokenizer:
