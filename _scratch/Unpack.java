@@ -1439,7 +1439,35 @@ public class Unpack extends AbstractJni {
                 // +0x1e2 needs to be 1 for CBNZ skip at 0x1203a6ac; the
                 // 0x7f003000 fill below already preserves the rest correctly.
                 safePage[0x100 + 0x1e2] = (byte)0x01;
+                // Session 23 part 7 (corrected): the crash-site chain is actually
+                //   fp = *(0x12082340)        -> SINGLETON (0x7f002000)
+                //   r1 = *fp                  -> *(SINGLETON+0)  -> our own override, 0x7f002100
+                //   r0 = *(r1 + 0xa4)          -> *(0x7f0021a4)   -> i.e. SINGLETON + 0x1a4
+                //   r0 = *r0                   -> reads SINGLETON2's raw BX-LR opcode bytes
+                //                                 (0xE12FFF1E) as if it were a pointer value
+                //   blx r0                     -> calls 0xE12FFF1E-ish garbage -> free-run crash
+                // First attempt patched SINGLETON+0xa4 directly, missing the extra `*fp`
+                // hop through the +0x000 override (0x7f002100) — the real double-indirection
+                // slot is SINGLETON+0x1a4 (0x7f0021a4), not SINGLETON+0xa4. Point THAT at a
+                // small pointer-cell (SINGLETON2+0x100) whose CONTENT is 0x7f003000, so the
+                // second dereference resolves back to the real, executable BX-LR stub.
+                final long PTR_CELL = SINGLETON2 + 0x100; // 0x7f003100
+                final int DBL_INDIR_OFFSET = 0x1a4;
+                safePage[DBL_INDIR_OFFSET]   = (byte)(PTR_CELL & 0xff);
+                safePage[DBL_INDIR_OFFSET+1] = (byte)((PTR_CELL >> 8) & 0xff);
+                safePage[DBL_INDIR_OFFSET+2] = (byte)((PTR_CELL >> 16) & 0xff);
+                safePage[DBL_INDIR_OFFSET+3] = (byte)((PTR_CELL >> 24) & 0xff);
                 backend.mem_write(SINGLETON, safePage);
+                try {
+                    backend.mem_write(PTR_CELL, new byte[]{
+                        (byte)(SINGLETON2 & 0xff), (byte)((SINGLETON2 >> 8) & 0xff),
+                        (byte)((SINGLETON2 >> 16) & 0xff), (byte)((SINGLETON2 >> 24) & 0xff)
+                    });
+                    System.out.println(">>> SINGLETON+0x1a4 double-indirection fix: points to 0x"
+                        + Long.toHexString(PTR_CELL) + " which holds 0x" + Long.toHexString(SINGLETON2));
+                } catch (Throwable t) {
+                    System.out.println(">>> SINGLETON+0x1a4 double-indirection fix FAILED: " + t);
+                }
                 // Verify critical bytes
                 byte[] check = backend.mem_read(0x7f0022e2L, 1);
                 System.out.println(">>> SINGLETON data: byte[0x7f0022e2] = 0x" + String.format("%02x", check[0] & 0xff));
@@ -1511,6 +1539,14 @@ public class Unpack extends AbstractJni {
                     backend.mem_protect(0x120381c0L & ~0xfff, 0x2000,
                             UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
                     System.out.println(">>> PAGE@0x12038000 re-protected EXEC before N.l");
+                    // Session 23 part 7: dump the window around 0x12038273 (offset 0x200-0x2ff)
+                    // as one hex blob so it can be disassembled offline with capstone, without
+                    // needing another remote round-trip. This is the read site misinterpreting
+                    // our SINGLETON2 stub bytes as data (session 23 part 6 characterization).
+                    StringBuilder win = new StringBuilder();
+                    for (int i = 0x200; i < 0x300 && i < pageBytes.length; i++)
+                        win.append(String.format("%02x", pageBytes[i] & 0xff));
+                    System.out.println(">>> PAGE@0x12038000 window[0x200:0x300]: " + win);
                 } catch (Throwable t) {
                     System.out.println(">>> PAGE@0x12038000 pre-protect failed: " + t);
                 }
