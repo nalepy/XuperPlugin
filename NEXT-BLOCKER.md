@@ -1,53 +1,39 @@
-# Next Blocker — N.l returns -1 after clean execution
+# Next Blocker — SINGLETON dispatch table is fully faked, b2b is not independent
 
-## Status (2026-07-30 session 22)
+## Status (2026-07-30 session 23)
 
-**N.l executes cleanly with no crashes.** All blockers from session 21 solved. The new blocker: N.l returns -1 (decryption failure) even though the anti-tamper, scan, and page protections are all resolved.
+Confirmed root cause of the `-1` return: it's not a missing-asset or wrong-method problem. The SINGLETON dispatch table (0x7f002000) that session 21 blanket-filled with harmless `BX LR` stubs (to survive anti-tamper crashes) is **read but never populated** by N.l — every real subroutine that should run through it is now a no-op. `b2b` is gated by the same uninitialized state, not independently callable.
 
-## Wins (session 22)
+## Wins (session 23)
 
-1. **Anti-tamper BL at 0x12038240 bypassed** — `b.reg_write(PC, 0x12038245)` skips the corrupting BL
-2. **Memory scan killed at 0x1203767c** — hook forces R0=0 + PC=0x12037681, bypassing the veneer-table page walk that took 801 FETCH events
-3. **page_collection_lock_arm crash root-caused**: 1MB pre-map or >~2000 4KB on-demand mappings corrupt Unicorn internals. 4KB mapping at moderate counts (50-200) is safe.
-4. **Backend proxy, raw Unicorn hooks, walk traces** all disabled during N.l — minimal interference
-5. **APK file (35MB live_base.apk) uploaded** to remote, available via IOResolver
-6. **FETCH events down from 801→51** (cut by scan-kill hook)
+1. **b2b called unconditionally** (removed the `if (nOk)` gate in Unpack.java) — proved b2b is not a standalone decrypt path
+2. **SINGLETON bytes dumped pre/post N.l** — byte-for-byte identical (`0x01`, `0x0030007f`, `0x0021007f`) before and after N.l runs. N.l's traced execution path never writes through the dispatch table at all.
+3. **b2b execution traced**: only 2 instructions (`0x12039458`, `0x1203945a`) execute before it returns `null` — an early guard check bails immediately, same as `l()`'s -1.
 
 ## Current state
 
 ```
 >>> N.l threw: java.lang.IllegalStateException: Invalid boolean value=-1
+>>> post-N.l SINGLETON byte[0x7f0022e2]=0x01        (unchanged from pre-N.l)
+>>> post-N.l SINGLETON byte[0x7f002138]=0x0030007f  (unchanged from pre-N.l)
+>>> post-N.l SINGLETON byte[0x7f002000]=0x0021007f  (unchanged from pre-N.l)
+>>> calling b2b regardless of N.l result (nOk=false) ...
+>>> [walk2] 0x12039458
+>>> [walk2] 0x1203945a
+>>> b2b returned: null
 ```
 
-N.l's method `l(Application, String)` executes fully but returns -1. Post-N.l probes show zero output — no decrypted DEX materialized anywhere. 453 non-zero pages = only libexec.so.
+## Root cause (confirmed)
 
-## Root cause analysis
+Session 21's fix for anti-tamper crashes was to fill the *entire* SINGLETON page with a fake `BX LR` stub at every 4-byte slot, so any dispatch-table call is a harmless no-op. This solved the crash but also silently deletes every real subroutine the table used to point to — including whatever does actual key derivation / decryption setup. `l()` correctly detects "not initialized" and returns -1; `b2b` checks the same state and bails with `null`. Both are behaving *correctly* given a dispatch table full of no-ops — this isn't a bug in the harness's JNI plumbing, it's the direct cost of the blanket-stub survival hack.
 
-The `-1` return is not a crash — it's a legitimate "decryption failed" sentinel from N.l. Likely causes:
-
-1. **Missing JNI asset access** — N.l probably reads DEX data from the APK via JNI asset APIs (`AAssetManager`, `AssetManager`), not via `open()` syscalls. The IOResolver never fires (`[IO] providing base.apk` not printed).
-
-2. **Decryption key/initialization wrong** — the SINGLETON, vtable, dispatch table, and GOT entries may have incorrect values. N.l derives encryption keys from runtime state that may not be fully replicated.
-
-3. **Wrong JNI method** — `l(Application, String)Z` might not be the main unpack entry. Other methods like `b(Ljava/lang/String;)[B` (b2b — byte-to-byte decrypt) are needed after `l` completes setup.
-
-4. **ijiami.dat format** — N.l reads the 4.5MB dat file but may expect a different format or additional files.
+The old theories (missing JNI asset I/O, wrong entry method, wrong ijiami.dat format) are now deprioritized — no evidence supports them, and the blanket-stub explanation fully accounts for the observed behavior.
 
 ## Key files modified this session
 
 | File | Changes |
 |------|---------|
-| `_scratch/Unpack.java` | Pre-map disabled; scan-kill hook at 0x1203767c; LastResortHook forces R0=0; PAGE@0x12038000 re-protect enabled; FETCH limit 50; walk traces disabled during N.l; Backend proxy disabled; raw Unicorn hooks disabled; APK IOResolver added |
-| `_scratch/run_lever_remote2.py` | New detached-run script with APK upload, polling, log fetch |
-| `_scratch/run_lever_remote.py` | Updated timeout |
-| `_assets/live_base.apk` | Uploaded to remote harness directory |
-
-## Recovered during session
-
-- **Scan architecture**: veneer table at 0x1207b400 dispatches via ARM-mode LDR PC entries to every 4KB page from 0x7b290 upward. Each entry is a 16-byte position-independent trampoline.
-- **Scan exit**: CBZ at 0x12037664 exits when R0=0 after BLX. Setting R0=0 in the LastResortHook hits this exit.
-- **Second scan call**: BL at 0x1203767c → 0x1207b7d0 is the actual page-walk dispatcher. LR from all FETCH events = 0x12037681.
-- **Pointer table at 0x12082340**: Contains stale on-disk defaults (including 0x7b290) — never populated by skipped ctors.
+| `_scratch/Unpack.java` | b2b call moved outside `if (nOk)`, wrapped in its own try/catch; added post-N.l SINGLETON byte dump (0x7f0022e2, 0x7f002138, 0x7f002000) for pre/post comparison |
 
 ## To reproduce
 
@@ -58,8 +44,7 @@ python _scratch/run_lever_remote2.py
 
 ## Next steps
 
-1. **Add JNI asset I/O logging** — trace what files/memory N.l reads during execution via unidbg's `IOResolver` and `FileIO` hooks
-2. **Try calling `b2b` after N.l** — the byte-to-byte decrypt method at 0x12039400. Even if `l` returns -1, `b2b` might produce output from the ijiami.dat
-3. **Dump SINGLETON state pre/post N.l** — check if the dispatch table was populated correctly
-4. **Identify the actual unpack JNI method** — search the Java decompiled source (telelatino_jadx/) for the native method declarations and the correct call sequence
-5. **Add EventMemHook for WRITE** with persistent storage — capture N.l's decryption writes before they're lost
+1. **Selective un-stubbing** — instead of blanket-filling SINGLETON with `BX LR`, identify which specific offsets are read via BLX/BX during the `[walk2]` trace (0x12037c18–0x12038158 range recorded in output.log) and disassemble each call site to find which original function pointer belongs there.
+2. **Recover pre-overwrite table values** — dump the on-disk/original bytes at 0x12082340 and 0x120868e0 (before session 21's force-write) to see what real function addresses the loader would have installed, then decide per-slot: real pointer vs safe stub.
+3. **Narrow the stub scope** — only replace the specific offsets known to trigger the anti-tamper/scan crash (traced in sessions 18-21) with the `BX LR` stub; leave all other slots pointing at their real targets so genuine init/decrypt code executes.
+4. **Re-run with EventMemHook WRITE tracking** on the SINGLETON page to catch the first attempted real write, if any slot does get restored to a real pointer — that'll show exactly which offset that is.

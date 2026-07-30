@@ -2195,6 +2195,22 @@ public class Unpack extends AbstractJni {
                 }
                 jniPhase[0] = savedJniPhase;
 
+                // Session 23: re-check the SINGLETON bytes we force-wrote pre-N.l.
+                // If N.l did any real init, these should differ from our fake BX-LR-stub
+                // fill; if unchanged, N.l never wrote through the dispatch table at all.
+                try {
+                    byte[] c1 = backend.mem_read(0x7f0022e2L, 1);
+                    byte[] c2 = backend.mem_read(0x7f002138L, 4);
+                    byte[] c3 = backend.mem_read(SINGLETON, 4);
+                    System.out.printf(">>> post-N.l SINGLETON byte[0x7f0022e2]=0x%02x%n", c1[0]&0xff);
+                    System.out.printf(">>> post-N.l SINGLETON byte[0x7f002138]=0x%02x%02x%02x%02x%n",
+                        c2[0]&0xff, c2[1]&0xff, c2[2]&0xff, c2[3]&0xff);
+                    System.out.printf(">>> post-N.l SINGLETON byte[0x7f002000]=0x%02x%02x%02x%02x%n",
+                        c3[0]&0xff, c3[1]&0xff, c3[2]&0xff, c3[3]&0xff);
+                } catch (Throwable t) {
+                    System.out.println(">>> post-N.l SINGLETON dump failed: " + t);
+                }
+
                 // Post-N.l: dump candidate landing zones and scan for non-zero pages
                 for (long probe : new long[]{0x100b2000L, 0x110b2000L, 0x200b2000L, 0x20101000L,
                         0x11fb8000L, 0x11f01000L, 0x11ffe000L}) {
@@ -2224,22 +2240,28 @@ public class Unpack extends AbstractJni {
                 }
                 System.out.println(">>> post-N.l scan: " + nonZero + " non-zero pages in 0x10000000-0x21000000");
 
-                if (nOk) {
+                // Session 23: call b2b unconditionally, even when N.l failed/threw.
+                // b2b([BI)[B takes the raw ijiami.dat bytes directly — it may not
+                // depend on state that l() sets up, so a failed l() shouldn't block it.
+                System.out.println(">>> calling b2b regardless of N.l result (nOk=" + nOk + ") ...");
+                try {
                     DvmObject<?> byteArray = new ByteArray(vm, ijiamiBytes);
-                DvmObject<?> b2bResult = N.callStaticJniMethodObject(emulator,
-                        "b2b([BI)[B", byteArray, ijiamiBytes.length);
-                if (b2bResult instanceof ByteArray) {
-                    byte[] dexBytes = ((ByteArray) b2bResult).getValue();
-                    System.out.println(">>> b2b returned byte["+dexBytes.length+"]");
-                    String magic = dexBytes.length >= 8 ?
-                        new String(dexBytes, 0, 8).replaceAll("[^\\x20-\\x7e]", ".") : "???";
-                    System.out.println(">>> first 8 bytes: "+magic);
-                    java.nio.file.Files.write(new File("/tmp/apkx/app_decrypted.dex").toPath(), dexBytes);
-                    System.out.println(">>> wrote /tmp/apkx/app_decrypted.dex");
-                } else {
-                    System.out.println(">>> b2b returned: " + b2bResult);
+                    DvmObject<?> b2bResult = N.callStaticJniMethodObject(emulator,
+                            "b2b([BI)[B", byteArray, ijiamiBytes.length);
+                    if (b2bResult instanceof ByteArray) {
+                        byte[] dexBytes = ((ByteArray) b2bResult).getValue();
+                        System.out.println(">>> b2b returned byte["+dexBytes.length+"]");
+                        String magic = dexBytes.length >= 8 ?
+                            new String(dexBytes, 0, 8).replaceAll("[^\\x20-\\x7e]", ".") : "???";
+                        System.out.println(">>> first 8 bytes: "+magic);
+                        java.nio.file.Files.write(new File("/tmp/apkx/app_decrypted.dex").toPath(), dexBytes);
+                        System.out.println(">>> wrote /tmp/apkx/app_decrypted.dex");
+                    } else {
+                        System.out.println(">>> b2b returned: " + b2bResult);
+                    }
+                } catch (Throwable t) {
+                    System.out.println(">>> b2b threw: " + t);
                 }
-                } // end if (nOk)
             } catch (Throwable t) {
                 System.out.println(">>> decrypt call threw: ");
                 t.printStackTrace(System.out);

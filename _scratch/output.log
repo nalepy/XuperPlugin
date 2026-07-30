@@ -641,7 +641,7 @@ INFO com.github.unidbg.linux.AndroidElfLoader - libexec.so load dependency liban
 stack corruption detected
 [crash]A/libc: stack corruption detected
 exit with code: 1
->>> REAL_JNI returned: 0x1 (32740535697409)
+>>> REAL_JNI returned: 0x1 (38079180046337)
 >>> DECRYPTED@0x12037090: 2846984788b10a3840f2ff12c11700ebd1519143401a411c4843404300f003000028fdd14ff0ff3409e00c48784400680068016c28468847009800f0d5fb30680199884201bf204602b05df804bbf0bd44f016e904000100b6b2040080b20400
 >>> DECRYPTED@0x12037b40: a946002401e04ff0ff34d8f8000090f8090188b12046062180b44ff0250700df80bc4845494603d9454243f03aec05604ff47a70e6f7eefe00200921c8f80000204680b44ff0250700df80bc484503d9444243f026ec0460fede00bf00f0ffffaeaa0400acb00500a6a804008caa0400831b00000c520500fe5105006f1b0000ca510500bb5105005b1b000098510500741afeff451b0000745105006a510500
 >>> DECRYPTED@0x12037a80: 9047d9f800000069816e2046884701204be04548414d7844d0f80080d8f80000d0f8880100284bd03a2143f07aed002846d080b44ff0140700df80bc0446a946a84242d9a4f1560001b2c1f34951014401f47c41401a00b2411c414340000130
@@ -759,8 +759,11 @@ WARN com.github.unidbg.arm.AbstractARMEmulator - Fetch memory failed: address=0x
 WARN com.github.unidbg.arm.AbstractARMEmulator - Fetch memory failed: address=0xac000, size=4, value=0x0, PC=unidbg@0xac000, LR=RX@0x12037689[libexec.so]0x37689
 WARN com.github.unidbg.arm.AbstractARMEmulator - Fetch memory failed: address=0xad000, size=4, value=0x0, PC=unidbg@0xad000, LR=RX@0x12037689[libexec.so]0x37689
 >>> [EventMemHook] FETCH LIMIT REACHED (51), NOT mapping
-WARN com.github.unidbg.AbstractEmulator - emulate RX@0x120381c1[libexec.so]0x381c1 exception sp=unidbg@0xe4ffa668, msg=unicorn.UnicornException: Invalid memory fetch (UC_ERR_FETCH_UNMAPPED), offset=58ms @ Runnable|Function32 address=0x120381c1, arguments=[unidbg@0xfffe12a0, 1064202203, 807752428, 1896828359]
+WARN com.github.unidbg.AbstractEmulator - emulate RX@0x120381c1[libexec.so]0x381c1 exception sp=unidbg@0xe4ffa668, msg=unicorn.UnicornException: Invalid memory fetch (UC_ERR_FETCH_UNMAPPED), offset=73ms @ Runnable|Function32 address=0x120381c1, arguments=[unidbg@0xfffe12a0, 1064202203, 807752428, 1896828359]
 >>> N.l threw: java.lang.IllegalStateException: Invalid boolean value=-1
+>>> post-N.l SINGLETON byte[0x7f0022e2]=0x01
+>>> post-N.l SINGLETON byte[0x7f002138]=0x0030007f
+>>> post-N.l SINGLETON byte[0x7f002000]=0x0021007f
 >>> post-N.l probe @0x100b2000 FAILED: com.github.unidbg.arm.backend.BackendException: mem_read address=0x100b2000, size=16
 >>> post-N.l probe @0x110b2000 FAILED: com.github.unidbg.arm.backend.BackendException: mem_read address=0x110b2000, size=16
 >>> post-N.l probe @0x200b2000 FAILED: com.github.unidbg.arm.backend.BackendException: mem_read address=0x200b2000, size=16
@@ -789,4 +792,8 @@ WARN com.github.unidbg.AbstractEmulator - emulate RX@0x120381c1[libexec.so]0x381
 >>> post-N.l non-zero page @0x12013000 first32=0x80978408
 >>> post-N.l non-zero page @0x12015000 first32=0x81019745
 >>> post-N.l scan: 453 non-zero pages in 0x10000000-0x21000000
+>>> calling b2b regardless of N.l result (nOk=false) ...
+>>> [walk2] 0x12039458
+>>> [walk2] 0x1203945a
+>>> b2b returned: null
 >>> done
