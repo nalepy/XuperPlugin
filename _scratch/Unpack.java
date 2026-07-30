@@ -694,6 +694,19 @@ public class Unpack extends AbstractJni {
                     sbh.append(' ').append(names[i]).append("=0x").append(Long.toHexString(v));
                 }
                 System.out.println(sbh);
+                // Session 20: dump the shared key/nonce buffer (r2, same stack addr every call
+                // per session16 notes) to see if IT is itself uninitialized garbage - if so,
+                // that's likely the true root cause behind the entries buffer not decrypting
+                // into readable text (feeding the 0x12026d74 tokenizer real strings).
+                try {
+                    long keyPtr = backend.reg_read(ArmConst.UC_ARM_REG_R2).longValue();
+                    byte[] key = backend.mem_read(keyPtr, 0x20);
+                    StringBuilder kh = new StringBuilder();
+                    for (byte x : key) kh.append(String.format("%02x", x & 0xff));
+                    System.out.println(">>> [3a314] key/nonce buf @0x" + Long.toHexString(keyPtr) + ": " + kh);
+                } catch (Throwable t) {
+                    System.out.println(">>> [3a314] key buf read failed: " + t);
+                }
             }
             public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
             public void detach() {}
