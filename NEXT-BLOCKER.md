@@ -1,4 +1,24 @@
-# Next Blocker — cheap short-circuit test ruled out; only path forward is host-level (Java) instrumentation
+# Next Blocker — NewObjectV theory definitively ruled out via ground-truth Java hook; true trigger still unknown
+
+## Update (session 23 part 13) — went host-level, got real unidbg source, ruled out the old NewObjectV theory for good
+
+Pulled unidbg-android 0.9.10-SNAPSHOT source directly from GitHub (`gh search code` / `gh api`, no auth needed — public repo `zhkl0228/unidbg`) instead of guessing. Found `DalvikVM.java`'s actual `_NewObjectV` implementation:
+
+```java
+DvmClass dvmClass = classMap.get(clazz.toIntPeer());
+DvmMethod dvmMethod = dvmClass == null ? null : dvmClass.getMethod(jmethodID.toIntPeer());
+if (dvmMethod == null) { throw new BackendException(); }
+```
+
+This lines up exactly with the old session 18/21 comment ("NewObjectV triggers re-entry... self-nukes the page with mprotect") — a `BackendException` thrown from *inside* an SVC handler (Java code, not guest ARM) during a bad/unregistered class lookup is a very plausible source of whatever internal unidbg cleanup does the mprotect.
+
+**Tested it directly instead of assuming.** `VM` exposes `getJNIEnv()`; walked `env->impl->functions[0x74]` (matching `DalvikVM`'s own `impl.setPointer(0x74, _NewObjectV)`) to get the *real* SVC stub address at runtime (`0xfffe0220` this run), and hooked it directly — not a guess, the actual dispatch point.
+
+**Result: the hook never fired.** `_NewObjectV` is never called at all during this entire run, right up to the crash. This **definitively rules out** the specific NewObjectV theory — not "not found in the bytes we looked at" like earlier rounds, but confirmed via ground truth at the real dispatch point that it simply never happens. Most likely explanation: our existing NOP patch at `0x12038226` (confirmed applied every run, described back in session 18/21 as removing exactly this NewObjectV call) is doing its job completely — it was never partially effective as part 9 assumed, it just doesn't cover *this* particular EXEC-loss symptom because that symptom has a different cause than the one that patch was written for.
+
+**Where this leaves us**: the true trigger for `0x12038000` losing EXEC is still unknown. Every specific theory tested this session (SINGLETON stub, FETCH LIMIT, mapping-churn corruption, guest-code mprotect SVC, NewObjectV) has been concretely ruled out with real evidence, not just left unconfirmed. That's real progress in the "eliminate the impossible" sense, but there's no remaining strong hypothesis queued up — the next session needs fresh ideas, not more testing of what's already been tried.
+
+**Session close-out**: 22 remote runs, 13 parts, 10 parallel agents, real unidbg GitHub source consulted, across one very long session. Two real bugs fixed and confirmed (SINGLETON2 dispatch 0→3), one anti-tamper kill-switch discovered, and five distinct theories for the remaining EXEC-loss bug definitively eliminated with hard evidence. This is the actual stopping point.
 
 ## Update (session 23 part 12) — entry-counter data kills the "short-circuit the 2nd call" idea
 
@@ -99,10 +119,20 @@ cd C:/Users/Nestor/Workspace/Xuper/XuperPlugin
 python _scratch/run_lever_remote2.py
 ```
 
-## Next steps (updated, part 11 — pivot away from guest-code disasm)
+## Next steps (updated, part 13 — five theories eliminated, need a fresh one)
 
-1. **Stop chasing guest ARM call graphs for this specific bug.** 10 functions traced across 2 rounds of parallel agents, zero mprotect-numbered SVCs found. Diminishing returns on this approach — the veneer-table slots (`0x1208244c`-`0x1208263c`) are the only unexplored guest-code lead left, and they resolve into the same broken pointer table, not obviously a syscall site.
-2. **Switch to host-level instrumentation.** If unidbg's own Java memory manager does the mprotect internally (per session 21's note), the way to catch it is a Java-side hook: add logging/breakpoints around unidbg's `Memory`/DVM class-loading code paths (particularly whatever handles `NewObjectV` or JNI object construction) rather than more ARM disassembly. Look at unidbg's source (or decompile the JAR if source isn't available on the remote box) for where `Memory.mprotect`/`Backend.mem_protect` gets called from JNI-handling code, and add a stack-trace dump at that call site.
-3. **Alternative pivot: accept it and re-trigger instead of prevent.** If this really is decrypt-execute-reprotect packer behavior (a live possibility, not yet ruled out), stop trying to stop the reprotect and instead figure out what re-populates/re-decrypts this page on a fresh call, then trigger that ourselves before the second entry to `0x120381c0`.
-4. `SINGLETON2 dispatch count` remains the best available progress metric (0→2→3 across this session's two real fixes) — any future fix attempt should be checked against whether it moves that number further.
-5. Bonus finding worth remembering for later: `0x1203b6f8` is a genuine anti-tamper kill-switch (`kill(getpid(), SIGABRT)` → `kill(getpid(), SIGKILL)`), gated behind a flag byte at `ctx+0x188` and two vtable calls. Not relevant to this bug, but worth knowing it exists if future runs start dying with SIGABRT/SIGKILL instead of the usual exceptions.
+**Ruled out with hard evidence, don't re-test these:**
+- Blanket SINGLETON stub blocking dispatch (falsified — dispatch count now 3)
+- FETCH LIMIT being too low (bisected 50→300→1500, always dies at cap+1 back when this was still the active bug — since fixed)
+- On-demand mapping churn corrupting `0x12038000` (canary reads + forced re-protect never failed)
+- A guest-code `mprotect`-numbered SVC anywhere in the ~10 traced functions (exhaustive disasm sweep, zero hits)
+- `NewObjectV` being called at all before the crash (hooked the real SVC dispatch point via `vm.getJNIEnv()`, confirmed via unidbg's actual GitHub source — zero hits, it's just not called, likely because the existing `0x12038226` NOP already fully suppresses it)
+
+**Promising directions for a fresh session:**
+1. **Use the same `vm.getJNIEnv()` technique on OTHER JNI function table entries.** We now have a proven, cheap, ground-truth method (unidbg's `VM.getJNIEnv()` → function table → real SVC address → `CodeHook`) — apply it to other candidates besides NewObjectV: `FindClass`, `GetMethodID`, `CallObjectMethodV`, or whichever env function the *actual* re-entry into `0x120381c0` goes through, once identified.
+2. **Look for unidbg's own internal mprotect/mem_protect calls directly in source**, rather than guessing which JNI function triggers it. Search `zhkl0228/unidbg` (via `gh search code "mem_protect"` or `"mprotect"` in the relevant repo) for every call site in `Memory`/`Backend`/DVM class-loading code, and check which are reachable from a native→Java bridge (SVC handler) rather than pure Java-side setup — that narrows the host-side search a lot faster than reading files top to bottom.
+3. **Trace what SVC (if any) fires right before the crash.** We have `_NewObjectV`'s resolved SVC address as a working example — do the same for a handful of other high-traffic env functions and log every hit right up to the crash, to see which one (if any) fires last before `0x120381c0`'s second entry.
+4. **Alternative pivot: accept it and re-trigger instead of prevent.** If this really is decrypt-execute-reprotect packer behavior (still not ruled out), stop trying to stop the reprotect and instead figure out what re-populates/re-decrypts this page on a fresh call, then trigger that ourselves before the second entry to `0x120381c0`.
+5. `SINGLETON2 dispatch count` remains the best available progress metric (0→2→3 across this session's two real fixes) — any future fix attempt should be checked against whether it moves that number further.
+6. Bonus finding worth remembering for later: `0x1203b6f8` is a genuine anti-tamper kill-switch (`kill(getpid(), SIGABRT)` → `kill(getpid(), SIGKILL)`), gated behind a flag byte at `ctx+0x188` and two vtable calls. Not relevant to this bug, but worth knowing it exists if future runs start dying with SIGABRT/SIGKILL instead of the usual exceptions.
+7. `gh search code`/`gh api` against `zhkl0228/unidbg` worked cleanly with no auth needed this session — a fast, reliable way to get ground truth about unidbg's behavior instead of guessing from symptoms. Reuse it early next time instead of re-deriving via trial and error.

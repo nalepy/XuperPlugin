@@ -13,6 +13,8 @@ import com.github.unidbg.linux.android.dvm.*;
 import com.github.unidbg.linux.android.dvm.array.ByteArray;
 import com.github.unidbg.linux.file.ByteArrayFileIO;
 import com.github.unidbg.memory.Memory;
+import com.github.unidbg.pointer.UnidbgPointer;
+import com.sun.jna.Pointer;
 import unicorn.ArmConst;
 import unicorn.UnicornConst;
 import java.io.File;
@@ -1533,6 +1535,50 @@ public class Unpack extends AbstractJni {
                     System.out.println(">>> fn@0x120381c0 entry-counter hook installed");
                 } catch (Throwable t) {
                     System.out.println(">>> fn@0x120381c0 entry-counter hook FAILED: " + t);
+                }
+
+                // Session 23 part 13: pivot to host-level (unidbg source-grounded) diagnosis.
+                // Fetched unidbg-android 0.9.10-SNAPSHOT source (DalvikVM.java) directly from
+                // GitHub. NewObjectV's real implementation:
+                //   DvmClass dvmClass = classMap.get(clazz.toIntPeer());
+                //   DvmMethod dvmMethod = dvmClass == null ? null : dvmClass.getMethod(jmethodID.toIntPeer());
+                //   if (dvmMethod == null) { throw new BackendException(); }
+                // The old session18/21 comment ("NewObjectV triggers re-entry... self-nukes the
+                // page with mprotect") lines up exactly with this: if our SINGLETON-based fake
+                // dispatch ever feeds a garbage/unregistered "clazz" pointer into NewObjectV,
+                // this throws a BackendException from INSIDE the SVC handler (Java code, not
+                // guest ARM) — a strong candidate for whatever unwind/cleanup path in unidbg's
+                // own Backend then does the mprotect. Hook the real _NewObjectV SVC stub
+                // directly (found via vm.getJNIEnv() -> functions table offset 0x74, matching
+                // DalvikVM's own `impl.setPointer(0x74, _NewObjectV)`) to see clazz/jmethodID
+                // for every call before any crash — ground truth instead of more guessing.
+                try {
+                    Pointer env = vm.getJNIEnv();
+                    Pointer funcTable = env.getPointer(0);
+                    Pointer newObjectVPtr = funcTable.getPointer(0x74);
+                    long newObjectVAddr = ((UnidbgPointer) newObjectVPtr).toUIntPeer();
+                    System.out.println(">>> _NewObjectV SVC stub resolved at 0x" + Long.toHexString(newObjectVAddr));
+                    final int[] newObjectVHits = new int[1];
+                    backend.hook_add_new(new CodeHook() {
+                        public void hook(Backend b, long address, int size, Object user) {
+                            int n = ++newObjectVHits[0];
+                            long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue(); // clazz
+                            long r2 = b.reg_read(ArmConst.UC_ARM_REG_R2).longValue(); // jmethodID
+                            long r3 = b.reg_read(ArmConst.UC_ARM_REG_R3).longValue(); // va_list
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                            System.out.println(">>> [_NewObjectV SVC] hit #" + n
+                                    + " clazz=0x" + Long.toHexString(r1)
+                                    + " jmethodID=0x" + Long.toHexString(r2)
+                                    + " va_list=0x" + Long.toHexString(r3)
+                                    + " LR=0x" + Long.toHexString(lr));
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, newObjectVAddr, newObjectVAddr, null);
+                    System.out.println(">>> _NewObjectV SVC hook installed");
+                } catch (Throwable t) {
+                    System.out.println(">>> _NewObjectV SVC hook FAILED: " + t);
+                    t.printStackTrace(System.out);
                 }
 
                 // Write the SINGLETON address into the binary's pointer table so code that loads
