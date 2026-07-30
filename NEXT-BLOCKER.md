@@ -1,4 +1,16 @@
-# Next Blocker — [CORRECTED] part 14's "no JNI dispatch" conclusion was WRONG; JNI trigger NOT ruled out
+# Next Blocker — EXEC loss is NOT our dynamic protect churn (bisected); static-protect region-split still a suspect
+
+## Update (session 23 part 16) — bisection: disabled all our dynamic mem_protect on 0x12038000, crash IDENTICAL
+
+After the part-15 audit reset my thinking to "suspect our own machinery first," ran a clean bisection. We had **three different-sized** `mem_protect` calls hammering the same base `0x12038000` (0x1000 in the EventMemHook canary, 0x2000 in the SINGLETON2-dispatch nudge, 0x4000 in the LastResortHook) — inconsistent sizes on one base is a known way to fragment Unicorn's internal region/permission tables. Strong prior suspect for silently clearing EXEC on a sub-page.
+
+Gated all three off (`BISECT_NO_DYNAMIC_PROTECT = true`), leaving only ONE static `mem_protect(0x12038000, 0x2000, RWX)` right before N.l.
+
+**Result: byte-for-byte identical crash.** Same address `0x120381c1`, same `UC_ERR_FETCH_PROT`, same `N.l threw`, same `SINGLETON2 dispatch count 0→3`, same dispatch LRs (0x1203a6a5, 0x1203a6b5, 0x12038273). Our dynamic per-hook protect churn is **definitively not the cause** of the EXEC loss — clean negative, this is what the bisection was for.
+
+**Not yet ruled out (the honest remaining sub-hypothesis):** the single *static* pre-N.l `mem_protect(0x12038000, 0x2000, RWX)` itself. The page was originally mapped by `loadLibrary` as part of one large libexec.so segment (base 0x12000000); calling `mem_protect` on a 0x2000 *sub-range* of that larger mapping is exactly what splits Unicorn's region list, and a split could leave a neighboring sub-page mis-permissioned. The bisection removed the dynamic churn but not this static split. **This is the next thing to test:** either drop the static protect entirely (see if the crash moves earlier — proving something else makes it non-exec — or stays), or replace it with a protect of the full segment-aligned region so no split occurs.
+
+Also still open (from part 15): the JNI-triggered-mprotect branch, and the real JNI call sequence during N.l (needs hooks installed before init + a positive control).
 
 ## CORRECTION (session 23 part 15 audit) — parts 13-14 over-claimed; retract the "JNI ruled out" conclusion
 

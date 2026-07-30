@@ -27,6 +27,11 @@ import java.util.LinkedHashSet;
 
 public class Unpack extends AbstractJni {
 
+    // Session 23 part 16 BISECT: when true, disable all dynamic (per-hook) mem_protect/
+    // mem_map churn on page 0x12038000 — leaving only ONE clean static protect before N.l.
+    // Isolates whether OUR inconsistent-size protect calls fragment the page's exec perms.
+    static final boolean BISECT_NO_DYNAMIC_PROTECT = true;
+
     private DvmObject<?> mMockActivityThread;
     private DvmObject<?> mMockAppBindData;
     private DvmObject<?> mMockApplicationInfo;
@@ -1503,10 +1508,16 @@ public class Unpack extends AbstractJni {
                         // a plain, already-safe mem_protect nudge on this hook instead — it's a
                         // real, frequently-firing checkpoint in the execution timeline, cheap to
                         // re-assert RWX on 0x12038000 every time we pass through it.
-                        try {
-                            b.mem_protect(0x12038000L, 0x2000,
-                                UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
-                        } catch (Throwable t) { /* best-effort */ }
+                        // Session 23 part 16 BISECT: disabled — this nudge (size 0x2000) plus the
+                        // canary (0x1000) plus the LastResort (0x4000) do inconsistent-size
+                        // mem_protect on the same base, a known Unicorn perm-fragmentation cause.
+                        // Testing whether OUR churn is what strips exec from this page.
+                        if (!BISECT_NO_DYNAMIC_PROTECT) {
+                            try {
+                                b.mem_protect(0x12038000L, 0x2000,
+                                    UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                            } catch (Throwable t) { /* best-effort */ }
+                        }
                     }
                     public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
                     public void detach() {}
@@ -1947,7 +1958,9 @@ public class Unpack extends AbstractJni {
                         // un-mapping/un-EXEC'ing this page specifically for code fetch, possibly
                         // repeatedly (session 21 saw "secondary loader" do this once already).
                         // Force it back to mapped+RWX continuously, not just once before N.l.
-                        if (fetchCount[0] % 10 == 0) {
+                        // Session 23 part 16 BISECT: gated — this canary re-map (0x1000) is one
+                        // of the three inconsistent-size protect calls under suspicion.
+                        if (!BISECT_NO_DYNAMIC_PROTECT && fetchCount[0] % 10 == 0) {
                             try {
                                 b.mem_map(0x12038000L, 0x1000L,
                                     UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
@@ -2282,8 +2295,13 @@ public class Unpack extends AbstractJni {
                             }
                             hit++;
                             try {
-                                b.mem_protect(0x12038000L, 0x4000,
-                                    UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                                // Session 23 part 16 BISECT: gated — the third inconsistent-size
+                                // protect (0x4000 here vs 0x2000 and 0x1000 elsewhere). Register
+                                // writes below stay (functional scan-bypass, not protect churn).
+                                if (!BISECT_NO_DYNAMIC_PROTECT) {
+                                    b.mem_protect(0x12038000L, 0x4000,
+                                        UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                                }
                                 // Force R12 to SINGLETON2 (ARM mode, bit 0 = 0) — BX LR stub
                                 b.reg_write(ArmConst.UC_ARM_REG_R12, 0x7f003000L);
                                 // Force R0=0 so CBZ at 0x12037664 takes exit branch, skipping scan
