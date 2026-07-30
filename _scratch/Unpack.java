@@ -3,6 +3,8 @@ import com.github.unidbg.*;
 import com.github.unidbg.arm.backend.Backend;
 import com.github.unidbg.arm.backend.Unicorn2Factory;
 import com.github.unidbg.arm.backend.CodeHook;
+import com.github.unidbg.arm.backend.EventMemHook;
+import com.github.unidbg.arm.backend.InterruptHook;
 import com.github.unidbg.arm.backend.WriteHook;
 import com.github.unidbg.file.FileResult;
 import com.github.unidbg.file.IOResolver;
@@ -15,6 +17,10 @@ import unicorn.ArmConst;
 import unicorn.UnicornConst;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.lang.reflect.Proxy;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Field;
 import java.util.LinkedHashSet;
 
 public class Unpack extends AbstractJni {
@@ -272,6 +278,16 @@ public class Unpack extends AbstractJni {
                 if ("/proc/self/status".equals(pathname)) {
                     String s = "Name:\tmgstv\nState:\tS\nPid:\t1\nPPid:\t0\nTracerPid:\t0\n";
                     return FileResult.success(new ByteArrayFileIO(oflags, pathname, s.getBytes()));
+                }
+                if ("/data/app/com.android.mgstv-1/base.apk".equals(pathname)) {
+                    try {
+                        byte[] apk = java.nio.file.Files.readAllBytes(
+                            new java.io.File("_assets/live_base.apk").toPath());
+                        System.out.println(">>> [IO] providing base.apk: " + apk.length + " bytes");
+                        return FileResult.success(new ByteArrayFileIO(oflags, pathname, apk));
+                    } catch (Throwable t) {
+                        System.out.println(">>> [IO] base.apk FAILED: " + t);
+                    }
                 }
                 return null;
             }
@@ -1290,6 +1306,63 @@ public class Unpack extends AbstractJni {
             } catch (Throwable t) {
                 System.out.println(">>> SCRATCH re-protect FAILED: " + t);
             }
+            // Session 21: override dispatch literal at 0x12082498 (entry 0 of ARM-mode table
+            // at 0x1207b400). The table returns 0xffffffff (not-found sentinel) because entries
+            // 0-3 are identical dummy data that don't match the "s/h/e/l/l/\0" format string.
+            // Fix: point the literal at an ARM `bx lr` stub so the caller gets its r0 back as
+            // a non-negative "match address" instead of the sentinel.
+            final long ARM_STUB = SCRATCH + 0xC00; // 0x7f000c00, within the existing RWX page
+            try {
+                byte[] preRead = backend.mem_read(0x12082498L, 4);
+                System.out.print(">>> DISPATCH_LITERAL pre-override @0x12082498: ");
+                for (byte x : preRead) System.out.printf("%02x", x & 0xff);
+                System.out.println();
+                backend.mem_write(ARM_STUB, new byte[]{
+                        (byte) 0x1e, (byte) 0xff, (byte) 0x2f, (byte) 0xe1  // ARM bx lr
+                });
+                byte[] stubAddr = new byte[]{
+                        (byte) (ARM_STUB & 0xff), (byte) ((ARM_STUB >> 8) & 0xff),
+                        (byte) ((ARM_STUB >> 16) & 0xff), (byte) ((ARM_STUB >> 24) & 0xff)
+                };
+                // Address must be even (bit 0=0) for ARM mode — dispatch uses `ldr pc,[...]`
+                // which reads a full target address, not thumb interwork.
+                backend.mem_write(0x12082498L, stubAddr);
+                byte[] verify = backend.mem_read(0x12082498L, 4);
+                System.out.print(">>> DISPATCH_LITERAL @0x12082498 -> ");
+                for (byte x : verify) System.out.printf("%02x", x & 0xff);
+                System.out.println(" (ARM_STUB @0x" + Long.toHexString(ARM_STUB) + ")");
+            } catch (Throwable t) {
+                System.out.println(">>> DISPATCH_OVERRIDE FAILED: " + t);
+            }
+            // Session 21: the method table at P2+0x18c is all zeros because entry processing
+            // loop never populated it. FindClass gets null className -> crash. Hook a broad
+            // range covering all known FindClass call sites and inject a valid class name for
+            // "s/h/e/l/l/N" whenever r1 (className ptr) is 0 before a blx to env->FindClass.
+            final long CLASS_NAME_ADDR = SCRATCH + 0x100;
+            try {
+                backend.mem_write(CLASS_NAME_ADDR, "s/h/e/l/l/N\0".getBytes());
+                System.out.println(">>> CLASS_NAME_STR @0x" + Long.toHexString(CLASS_NAME_ADDR));
+            } catch (Throwable t) {
+                System.out.println(">>> CLASS_NAME_STR write FAILED: " + t);
+            }
+            backend.hook_add_new(new CodeHook() {
+                int n;
+                public void hook(Backend b, long address, int size, Object user) {
+                    long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue();
+                    if (r1 == 0L) {
+                        b.reg_write(ArmConst.UC_ARM_REG_R1, CLASS_NAME_ADDR);
+                        if (n++ < 4) {
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                            long r2 = b.reg_read(ArmConst.UC_ARM_REG_R2).longValue();
+                            System.out.println(">>> [FindClass-fix@" + Long.toHexString(address)
+                                + "] r0=0x" + Long.toHexString(r0)
+                                + " r1=0->classname r2=0x" + Long.toHexString(r2));
+                        }
+                    }
+                }
+                public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                public void detach() {}
+            }, 0x120378a0L, 0x12037b40L, null);
             // Bypass export stub: call real Thumb JNI_OnLoad directly.
             jniPhase[0] = true;
             // Offset must be odd for Thumb — even 0x43544 runs as ARM and raises bogus SWI.
@@ -1304,11 +1377,25 @@ public class Unpack extends AbstractJni {
                 System.out.println(">>> JNI_OnLoad SUCCESS (JNI_VERSION_1_6)");
             }
             // Post-call decrypted-code dumps for offline capstone disasm (ctors have run by now).
+            // Note: gap region 0x120378dc-0x120379cf added to find the 2nd FindClass call site (LR=0x1203799b in crash)
             for (long[] range : new long[][]{{0x12037090L, 0x60}, {0x12037b40L, 0xa0}, {0x12037a80L, 0x60},
-                    {0x12037860L, 0x60}, {0x120379d0L, 0xb0}, {0x120370e0L, 0x80},
+                    {0x12037860L, 0x60}, {0x120378dcL, 0xf4},  // gap: covers 0x120378dc-0x120379cf
+                    {0x120379d0L, 0xb0}, {0x120370e0L, 0x80},
                     {0x1201e378L, 0x180}, {0x12037c18L, 0x60}, {0x1203a2c0L, 0x140}, {0x12037c50L, 0x180},
                     {0x12037dc8L, 0xa0}, {0x120378a0L, 0x40}, {0x12026d74L, 0x100},
-                    {0x1207b400L, 0x100}, {0x1207b630L, 0x100}, {0x1203f9b0L, 0x100}, {0x1208ccf0L, 0x40}}) {
+                    {0x1207b400L, 0x100}, {0x1207b630L, 0x100}, {0x1203f9b0L, 0x100}, {0x1208ccf0L, 0x40},
+                    {0x120823e0L, 0x180},  // dispatch literal pool
+                    {0x12082340L, 0x40},   // BEFORE patching: original entries at the pointer-table site we overwrite with SINGLETON: 0x1207b400 entries 0-12 use base 0x12082408+offset, 630 uses 0x12081638+offset; on-disk shows 0x0007b290 but these are ctor-populated at runtime
+                    {0x12240484L, 0x100},  // the entries buffer itself — XOR-decrypted but what does it actually contain?
+                    {0x1214f3e4L, 0x40},   // dispatch target of 0x1207b400 entry 0 — likely a libc function (strstr?), see if bytes are decodable
+                    {0x120381c0L, 0xc0},   // the FETCH_PROT crash site — capture decrypted bytes for disassembly
+                    {0x1203a6a0L, 0x30},   // LR=0x1203a6a5 from FETCH_UNMAPPED loop — what's here?
+                    {0x1203a570L, 0xd0},   // code between last BLX_R12 trace (0x1203a649) and the blx r5 at 0x1203a6a2
+                    {0x1203a070L, 0x200},  // the full unrolled-call-table area covering 0x1203a3d5-0x1203a649
+                    {0x12039400L, 0x200},  // b2b code region — 0x12039458 is entry point, capture for disasm
+                    {0x12037660L, 0x20},   // dispatch table: LDR R12,[R6,#?]/BLX R12 pair at 0x12037660-2 — see why R12=0
+                    {0x1203b570L, 0x40},   // dispatch at 0x1203b577 — LR from every fetch miss; see what branches to decrypted pages
+                    }) {
                 try {
                     long ea = range[0];
                     int len = (int) range[1];
@@ -1328,15 +1415,53 @@ public class Unpack extends AbstractJni {
         if (dm != null) {
             try {
                 final long VTABLE = 0x7f001000L;
-                final long SINGLETON = 0x7f002000L;
+                final long SINGLETON = 0x7f002000L;     // data page: code reads [r10] from here as a struct pointer
+                final long SINGLETON2 = 0x7f003000L;    // code page: BX LR stub for BLX R12 / BLX r5 trampoline
                 backend.mem_map(VTABLE, 0x1000, UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE);
-                backend.mem_map(SINGLETON, 0x1000, UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE);
+                backend.mem_map(SINGLETON, 0x1000, UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                backend.mem_map(SINGLETON2, 0x1000, UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
 
-                byte[] singPtr = new byte[] {
+                // Fill the whole SINGLETON page with SAFE pointers (0x7f003000 = SINGLETON2 BX LR stub)
+                // so any field read as a function pointer returns a harmless BX LR. This covers:
+                //   - struct+0x38 LDR chain (0x1203a6ae)
+                //   - struct+offset calls through blx r0/ip/r5
+                //   - vtable dispatch through any offset on the struct
+                byte[] safePage = new byte[0x1000];
+                for (int i = 0; i < safePage.length; i += 4) {
+                    safePage[i]   = (byte)0x00;
+                    safePage[i+1] = (byte)0x30;
+                    safePage[i+2] = (byte)0x00;
+                    safePage[i+3] = (byte)0x7f;
+                }
+                // Override +0x000: ptr to data area at 0x7f002100
+                safePage[0] = (byte)0x00; safePage[1] = (byte)0x21;
+                safePage[2] = (byte)0x00; safePage[3] = (byte)0x7f;
+                // +0x1e2 needs to be 1 for CBNZ skip at 0x1203a6ac; the
+                // 0x7f003000 fill below already preserves the rest correctly.
+                safePage[0x100 + 0x1e2] = (byte)0x01;
+                backend.mem_write(SINGLETON, safePage);
+                // Verify critical bytes
+                byte[] check = backend.mem_read(0x7f0022e2L, 1);
+                System.out.println(">>> SINGLETON data: byte[0x7f0022e2] = 0x" + String.format("%02x", check[0] & 0xff));
+                check = backend.mem_read(0x7f002138L, 4);
+                System.out.printf(">>> SINGLETON data: byte[0x7f002138] = 0x%02x%02x%02x%02x%n",
+                    check[0]&0xff, check[1]&0xff, check[2]&0xff, check[3]&0xff);
+                check = backend.mem_read(SINGLETON, 4);
+                System.out.printf(">>> SINGLETON data: byte[0x7f002000] = 0x%02x%02x%02x%02x%n",
+                    check[0]&0xff, check[1]&0xff, check[2]&0xff, check[3]&0xff);
+
+                // SINGLETON2 code page: write ARM BX LR stub
+                backend.mem_write(SINGLETON2, new byte[]{
+                    (byte)0x1E, (byte)0xFF, (byte)0x2F, (byte)0xE1  // BX LR
+                });
+
+                // Write the SINGLETON address into the binary's pointer table so code that loads
+                // from 0x12082340 gets a struct pointer (not the BX LR stub address).
+                byte[] singDataPtr = new byte[] {
                     (byte)(SINGLETON & 0xff), (byte)((SINGLETON>>8)&0xff),
                     (byte)((SINGLETON>>16)&0xff), (byte)((SINGLETON>>24)&0xff)
                 };
-                backend.mem_write(0x12082340L, singPtr);
+                backend.mem_write(0x12082340L, singDataPtr);
                 byte[] vtPtr = new byte[] {
                     (byte)(VTABLE & 0xff), (byte)((VTABLE>>8)&0xff),
                     (byte)((VTABLE>>16)&0xff), (byte)((VTABLE>>24)&0xff)
@@ -1356,13 +1481,751 @@ public class Unpack extends AbstractJni {
                 DvmObject<?> app = AppClass.newObject(null);
                 System.out.println(">>> mock app: "+app);
 
-                System.out.println(">>> calling N.l(Application, path) ...");
-                boolean lResult = N.callStaticJniMethodBoolean(emulator,
-                        "l(Landroid/app/Application;Ljava/lang/String;)Z",
-                        app, "/data/app/com.android.mgstv-1/base.apk");
-                System.out.println(">>> N.l returned: "+lResult);
+                // Session 21: the page at 0x120381c0 was made non-exec by secondary loader.
+                // Try to re-protect it + dump its bytes for analysis before N.l.
+                try {
+                    byte[] pageBytes = backend.mem_read(0x12038000L, 0x2000);
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < 64 && i < pageBytes.length; i++)
+                        sb.append(String.format("%02x", pageBytes[i] & 0xff));
+                    System.out.println(">>> PAGE@0x12038000 before N.l: " + sb);
+                    backend.mem_protect(0x120381c0L & ~0xfff, 0x2000,
+                            UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                    System.out.println(">>> PAGE@0x12038000 re-protected EXEC before N.l");
+                } catch (Throwable t) {
+                    System.out.println(">>> PAGE@0x12038000 pre-protect failed: " + t);
+                }
 
-                DvmObject<?> byteArray = new ByteArray(vm, ijiamiBytes);
+                // Dump bytes around 0x12038270 — critical site where walk2 reaches but safety
+                // hook doesn't fire (meaning r0 != 0 there). Disassemble to understand why.
+                try {
+                    byte[] code270 = backend.mem_read(0x12038270L, 32);
+                    StringBuilder sb270 = new StringBuilder(">>> CODE@0x12038270[0..+32]: ");
+                    for (byte x : code270) sb270.append(String.format("%02x", x & 0xff));
+                    System.out.println(sb270);
+                } catch (Throwable t) {
+                    System.out.println(">>> CODE@0x12038270 dump FAILED: " + t);
+                }
+
+                // Patch the `blx r3` at 0x12038226 to `nop; nop`. The call goes through
+                // env->functions[25] (NewObjectV in JNI table) and triggers re-entry to
+                // 0x120381c0 via a path that self-nukes the page with mprotect. We verified
+                // SVC-based InterruptHook doesn't fire because unidbg's ARM32SyscallHandler
+                // wraps the mprotect from host code, not from a unicorn SVC. Skipping the
+                // call lets us see what the code does next (it'll likely fail on null data
+                // or unpopulated structure, but at least we'll get a different error).
+                try {
+                    byte[] pre = backend.mem_read(0x12038226L, 2);
+                    System.out.print(">>> BLX_R3 pre-patch @0x12038226: ");
+                    for (byte x : pre) System.out.printf("%02x", x & 0xff);
+                    backend.mem_write(0x12038226L, new byte[]{0x00, (byte) 0xbf});
+                    byte[] post = backend.mem_read(0x12038226L, 2);
+                    System.out.print(" -> post: ");
+                    for (byte x : post) System.out.printf("%02x", x & 0xff);
+                    System.out.println(" (nop)");
+                } catch (Throwable t) {
+                    System.out.println(">>> BLX_R3 patch FAILED: " + t);
+                }
+
+                // Re-NOP the `bl #0x1201e6dc` at 0x12038274 — it triggers a memory-scan loop in libexec.so
+                // (LR=0x1201e725) that walks 0x1000+ upward through unmapped pages indefinitely.
+                // With the blanket SINGLETON fill, the subsequent code (bl #0x1203a760 etc.) should
+                // work correctly since all struct fields return safe pointers.
+                try {
+                    byte[] pre274 = backend.mem_read(0x12038274L, 4);
+                    System.out.print(">>> BL_1e6dc pre-patch @0x12038274: ");
+                    for (byte x : pre274) System.out.printf("%02x", x & 0xff);
+                    backend.mem_write(0x12038274L, new byte[]{0x00, (byte)0xbf, 0x00, (byte)0xbf});
+                    byte[] post274 = backend.mem_read(0x12038274L, 4);
+                    System.out.print(" -> post: ");
+                    for (byte x : post274) System.out.printf("%02x", x & 0xff);
+                    System.out.println(" (two nops)");
+                } catch (Throwable t) {
+                    System.out.println(">>> BL_1e6dc patch FAILED: " + t);
+                }
+                // The code at 0x1203827c does `str.w r0, [fp]` which zeros the struct base pointer
+                // at [0x7f002000] (fp=sl=r10=0x7f002000). Re-write it after each such call.
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        public void hook(Backend b, long address, int size, Object user) {
+                            // Re-write [0x7f002000] = ptr to 0x7f002100
+                            b.mem_write(0x7f002000L, new byte[]{
+                                (byte)0x00, (byte)0x21, (byte)0x00, (byte)0x7f
+                            });
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x1203827eL, 0x1203827eL, null);
+                    System.out.println(">>> SINGLETON base-pointer restore hook at 0x1203827e");
+                } catch (Throwable t) {
+                    System.out.println(">>> SINGLETON restore hook FAILED: " + t);
+                }
+
+                // Scan decrypted code region for ALL Thumb SVC instructions (0xdf??) and hook each
+                // one. Thumb SVC encoding (little-endian): bytes = [imm8, 0xdf]. We previously
+                // only caught svc #0 (00 df); now catch any immediate value.
+                {
+                    int nSvc = 0;
+                    try {
+                        byte[] region = backend.mem_read(0x12037000L, 0x5000);
+                        for (int i = 0; i + 1 < region.length; i += 2) {
+                            int b0 = region[i] & 0xff;
+                            int b1 = region[i+1] & 0xff;
+                            if (b1 == 0xdf) { // Thumb SVC: [imm8, 0xdf]
+                                final long svcAddr = 0x12037000L + i;
+                                backend.hook_add_new(new CodeHook() {
+                                    int hits;
+                                    public void hook(Backend b, long address, int size, Object user) {
+                                        long r7 = b.reg_read(ArmConst.UC_ARM_REG_R7).longValue();
+                                        long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                                        long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue();
+                                        long r2 = b.reg_read(ArmConst.UC_ARM_REG_R2).longValue();
+                                        if (hits++ < 16) {
+                                            System.out.println(">>> [SVC@" + Long.toHexString(svcAddr)
+                                                + " svc#" + b0 + "] r7=" + r7
+                                                + " r0=0x" + Long.toHexString(r0)
+                                                + " r1=0x" + Long.toHexString(r1)
+                                                + " r2=0x" + Long.toHexString(r2));
+                                        }
+                                    }
+                                    public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                                    public void detach() {}
+                                }, svcAddr, svcAddr, null);
+                                nSvc++;
+                            }
+                        }
+                    } catch (Throwable t) {
+                        System.out.println(">>> SVC scan failed: " + t);
+                    }
+                    System.out.println(">>> SVC scan: " + nSvc + " SVC hooks installed");
+                }
+                // Pre-map a large low-memory range for the libexec memory scan loop (libexec 0x3b72d)
+                // and the N.l decrypted-code output region (~0x11000000-0x12000000). The scan walks
+                // linearly from 0x1000 upward through every page. On real hardware the linker data
+                // structures would cause the scan to terminate; here we give it enough zero-filled
+                // pages so the iteration finishes before the cap.
+                // Note: 1MB chunks at 0x12000000 collide with libexec.so's mapping, causing unicorn
+                // to reject the entire 1MB. Using 64KB fallback for any failed 1MB attempt ensures
+                // pages just below libexec are still covered.
+                // No pre-map — maps pages on demand via EventMemHook at 4KB granularity.
+                // This avoids page_collection_lock_arm crashes from 1MB chunks.
+                // 4KB on-demand mappings do eventually crash at ~2000+ count, so keep FETCH limit moderate.
+                System.out.println(">>> Pre-map DISABLED — using EventMemHook on-demand");
+
+                // Safety net: EventMemHook for UNMAPPED access (READ/WRITE/FETCH). Catches:
+                //   * WRITE_UNMAPPED — N.l decrypt writes to pages above 0x10000000; with the
+                //     extended pre-map (0x1000-0x11000000) these should land, but this hook
+                //     catches anything that slips past.
+                //   * FETCH_UNMAPPED — code branches to decrypted pages; if the write missed
+                //     (no WRITE_UNMAPPED fell through), we still map and let it fail gracefully.
+                final int[] fetchCount = {0};
+                backend.hook_add_new(new EventMemHook() {
+                    public boolean hook(Backend b, long address, int size, long value, Object user,
+                            EventMemHook.UnmappedType type) {
+                        if (type == EventMemHook.UnmappedType.Fetch) {
+                            if (fetchCount[0]++ >= 50) {
+                                System.out.println(">>> [EventMemHook] FETCH LIMIT REACHED (" + fetchCount[0] + "), NOT mapping");
+                                return false;
+                            }
+                        }
+                        String tag = type == EventMemHook.UnmappedType.Fetch ? "FETCH"
+                                : type == EventMemHook.UnmappedType.Write ? "WRITE"
+                                : "READ";
+                        // Fast 4KB mapping — no verbose logging to avoid slowing down the scan
+                        long pageStart = address & ~0xfffL;
+                        // Only log every 256th mapping (one per MB of scan)
+                        if ((fetchCount[0] & 0xff) == 0) {
+                            System.out.println(">>> [EventMemHook] FETCH #" + fetchCount[0]
+                                + " mapping 4KB at 0x" + Long.toHexString(pageStart));
+                        }
+                        try {
+                            b.mem_map(pageStart, 0x1000L,
+                                UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                        } catch (Throwable t) {
+                            // page already mapped or overlapping; skip
+                        }
+                        return true;
+                    }
+                    public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                    public void detach() {}
+                }, 112, null); // UC_HOOK_MEM_UNMAPPED mask: READ(16)|WRITE(32)|FETCH(64) = 112
+
+                // DISABLED: Backend proxy — was causing page_collection_lock_arm crashes.
+                // The secondary loader's mprotect is already handled by re-protecting
+                // PAGE@0x12038000 before N.l with RWX. No need for dynamic interception.
+                System.out.println(">>> Backend proxy DISABLED (pre-protecting via static mem_protect)");
+                // Still need realBackendRef for the raw unicorn hooks check below
+                final Backend[] realBackendRef = new Backend[]{emulator.getBackend()};
+                // Completely disable raw unicorn hooks — they use reflection which can corrupt internals
+                final boolean ENABLE_RAW_HOOKS = false;
+
+                // Session 21 Plan F: register UC_HOOK_MEM_FETCH_PROT directly on the raw Unicorn
+                // native handle. The EventMemHook API (type mask 64) only handles UNMAPPED fetches,
+                // not PROT fetches. The real mprotect goes through Memory.mprotect → Unicorn.mem_protect
+                // which bypasses Backend entirely, so neither the backend proxy nor EventMemHook
+                // can catch it. A UC_HOOK_MEM_FETCH_PROT fires at the native level when the fetch
+                // fails due to protection; we re-protect on the spot and return true to retry.
+                if (ENABLE_RAW_HOOKS && realBackendRef[0] != null) {
+                    try {
+                        // Access the unicorn field from Unicorn2Backend
+                        Class<?> backendClass = realBackendRef[0].getClass();
+                        Field unicornField = null;
+                        try {
+                            unicornField = backendClass.getDeclaredField("unicorn");
+                        } catch (NoSuchFieldException e) {
+                            // try superclass
+                            unicornField = backendClass.getSuperclass().getDeclaredField("unicorn");
+                        }
+                        unicornField.setAccessible(true);
+                        final Object unicorn = unicornField.get(realBackendRef[0]);
+                        System.out.println(">>> [RawUnicorn] got Unicorn handle: "
+                            + unicorn.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(unicorn)));
+
+                        // Find the unicorn-level EventMemHook interface
+                        Class<?> uehClass = Class.forName("com.github.unidbg.arm.backend.unicorn.EventMemHook");
+
+                        // Create the callback via dynamic proxy
+                        Object fetchProtHook = Proxy.newProxyInstance(
+                            uehClass.getClassLoader(),
+                            new Class<?>[]{uehClass},
+                            new InvocationHandler() {
+                                public Object invoke(Object proxy, Method method, Object[] args2) throws Throwable {
+                                    if ("hook".equals(method.getName())) {
+                                        // args: Unicorn unicorn, long address, int size, long value, Object user
+                                        long addr = (Long) args2[1];
+                                        try {
+                                            // Log PC/LR at fault time
+                                            Method regRead = unicorn.getClass().getMethod("reg_read", int.class);
+                                            long pc = (Long) regRead.invoke(unicorn, 15);
+                                            long lr = (Long) regRead.invoke(unicorn, 14);
+                                            System.out.println(">>> [UC_HOOK_MEM_FETCH_PROT] fault at 0x"
+                                                + Long.toHexString(addr) + "  PC=0x" + Long.toHexString(pc)
+                                                + "  LR=0x" + Long.toHexString(lr));
+                                            // Re-protect the faulting page with exec
+                                            long pageStart = addr & ~0xfffL;
+                                            Method mp = unicorn.getClass().getMethod("mem_protect",
+                                                long.class, long.class, int.class);
+                                            mp.invoke(unicorn, pageStart, 0x1000L,
+                                                UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                                            System.out.println(">>> [UC_HOOK_MEM_FETCH_PROT] re-protected page 0x"
+                                                + Long.toHexString(pageStart) + " RWX OK");
+                                            return Boolean.TRUE; // handled — retry fetch
+                                        } catch (Throwable t2) {
+                                            System.out.println(">>> [UC_HOOK_MEM_FETCH_PROT] re-protect FAILED: " + t2);
+                                            return Boolean.FALSE;
+                                        }
+                                    }
+                                    if ("toString".equals(method.getName())) return "FetchProtHook";
+                                    // onAttach/detach — no-op
+                                    return null;
+                                }
+                            });
+
+                        // Register UC_HOOK_MEM_FETCH_PROT = 1 << 9 = 512
+                        Method hookAddMem = unicorn.getClass().getMethod("hook_add_new",
+                            uehClass, int.class, Object.class);
+                        Object result = hookAddMem.invoke(unicorn, fetchProtHook, 512, null);
+                        System.out.println(">>> [RawUnicorn] UC_HOOK_MEM_FETCH_PROT installed (result="
+                            + result.getClass().getSimpleName() + ")");
+
+                    } catch (Throwable t) {
+                        System.out.println(">>> [RawUnicorn] FETCH_PROT hook FAILED: " + t);
+                        t.printStackTrace(System.out);
+                    }
+                } else {
+                    System.out.println(">>> [RawUnicorn] no realBackendRef, skipping FETCH_PROT hook");
+                }
+
+                // Session 21c: UC_HOOK_MEM_WRITE_PROT (mask 256) — catch writes to write-protected
+                // pages. The secondary loader at 0x120381c1 keeps crashing with UC_ERR_WRITE_PROT
+                // because it tries to write to a page that had its write permission removed by the
+                // host-side mprotect (which bypasses the Backend proxy). Re-enable write on the
+                // target page and retry.
+                if (ENABLE_RAW_HOOKS && realBackendRef[0] != null) {
+                    try {
+                        Class<?> backendClass = realBackendRef[0].getClass();
+                        Field unicornField = null;
+                        try {
+                            unicornField = backendClass.getDeclaredField("unicorn");
+                        } catch (NoSuchFieldException e) {
+                            unicornField = backendClass.getSuperclass().getDeclaredField("unicorn");
+                        }
+                        unicornField.setAccessible(true);
+                        final Object unicornWp = unicornField.get(realBackendRef[0]);
+
+                        Class<?> uehClass = Class.forName("com.github.unidbg.arm.backend.unicorn.EventMemHook");
+                        Object writeProtHook = Proxy.newProxyInstance(
+                            uehClass.getClassLoader(),
+                            new Class<?>[]{uehClass},
+                            new InvocationHandler() {
+                                public Object invoke(Object proxy, Method method, Object[] args2) throws Throwable {
+                                    if ("hook".equals(method.getName())) {
+                                        long addr = (Long) args2[1];
+                                        int size = (Integer) args2[2];
+                                        long pc = 0, lr = 0;
+                                        try {
+                                            Method regRead = unicornWp.getClass().getMethod("reg_read", int.class);
+                                            pc = (Long) regRead.invoke(unicornWp, 15);
+                                            lr = (Long) regRead.invoke(unicornWp, 14);
+                                        } catch (Throwable t) {}
+                                        System.out.println(">>> [UC_HOOK_MEM_WRITE_PROT] write to protected 0x"
+                                            + Long.toHexString(addr) + " size=" + size
+                                            + " PC=0x" + Long.toHexString(pc)
+                                            + " LR=0x" + Long.toHexString(lr));
+                                        // Re-enable write permission on the faulting page
+                                        long pageStart = addr & ~0xfffL;
+                                        Method mp = unicornWp.getClass().getMethod("mem_protect",
+                                            long.class, long.class, int.class);
+                                        mp.invoke(unicornWp, pageStart, 0x1000L,
+                                            UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                                        System.out.println(">>> [UC_HOOK_MEM_WRITE_PROT] re-protected page 0x"
+                                            + Long.toHexString(pageStart) + " RWX OK");
+                                        return Boolean.TRUE; // handled — retry write
+                                    }
+                                    if ("toString".equals(method.getName())) return "WriteProtHook";
+                                    return null;
+                                }
+                            });
+                        Method hookAddMem = unicornWp.getClass().getMethod("hook_add_new",
+                            uehClass, int.class, Object.class);
+                        Object result = hookAddMem.invoke(unicornWp, writeProtHook, 256, null);
+                        System.out.println(">>> [RawUnicorn] UC_HOOK_MEM_WRITE_PROT installed (result="
+                            + result.getClass().getSimpleName() + ")");
+                    } catch (Throwable t) {
+                        System.out.println(">>> [RawUnicorn] WRITE_PROT hook FAILED: " + t);
+                        t.printStackTrace(System.out);
+                    }
+                }
+
+                // Session 21b: also handle UC_HOOK_MEM_UNMAPPED (mask 0x10) for read/write
+                // from unmapped pages. The decrypted N.l code reads from a computed address
+                // 0xe13000a6 which isn't mapped yet. Auto-map on access.
+                if (ENABLE_RAW_HOOKS && realBackendRef[0] != null) {
+                    try {
+                        // Re-use the unicorn handle already obtained above
+                        Class<?> backendClass = realBackendRef[0].getClass();
+                        Field unicornField = null;
+                        try {
+                            unicornField = backendClass.getDeclaredField("unicorn");
+                        } catch (NoSuchFieldException e) {
+                            unicornField = backendClass.getSuperclass().getDeclaredField("unicorn");
+                        }
+                        unicornField.setAccessible(true);
+                        final Object unicorn2 = unicornField.get(realBackendRef[0]);
+
+                        Class<?> uehClass = Class.forName("com.github.unidbg.arm.backend.unicorn.EventMemHook");
+                        Object readUnmappedHook = Proxy.newProxyInstance(
+                            uehClass.getClassLoader(),
+                            new Class<?>[]{uehClass},
+                            new InvocationHandler() {
+                                public Object invoke(Object proxy, Method method, Object[] args2) throws Throwable {
+                                    if ("hook".equals(method.getName())) {
+                                        long addr = (Long) args2[1];
+                                        int size = (Integer) args2[2];
+                                        long pc = 0, lr = 0;
+                                        try {
+                                            Method regRead = unicorn2.getClass().getMethod("reg_read", int.class);
+                                            pc = (Long) regRead.invoke(unicorn2, 15);
+                                            lr = (Long) regRead.invoke(unicorn2, 14);
+                                        } catch (Throwable t) {}
+                                        System.out.println(">>> [UC_HOOK_MEM_UNMAPPED] addr=0x"
+                                            + Long.toHexString(addr) + " size=" + size
+                                            + " PC=0x" + Long.toHexString(pc)
+                                            + " LR=0x" + Long.toHexString(lr));
+                                        // Map the faulting page RWX so access can proceed
+                                        long pageStart = addr & ~0xfffL;
+                                        Method mp = unicorn2.getClass().getMethod("mem_map",
+                                            long.class, long.class, int.class);
+                                        mp.invoke(unicorn2, pageStart, 0x1000L,
+                                            UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                                        System.out.println(">>> [UC_HOOK_MEM_UNMAPPED] mapped page 0x"
+                                            + Long.toHexString(pageStart) + " RWX OK");
+                                        return Boolean.TRUE;
+                                    }
+                                    if ("toString".equals(method.getName())) return "UnmappedHook";
+                                    return null;
+                                }
+                            });
+                        Method hookAddMem = unicorn2.getClass().getMethod("hook_add_new",
+                            uehClass, int.class, Object.class);
+                        Object result = hookAddMem.invoke(unicorn2, readUnmappedHook, 0x10, null);
+                        System.out.println(">>> [RawUnicorn] UC_HOOK_MEM_UNMAPPED installed (result="
+                            + result.getClass().getSimpleName() + ")");
+                    } catch (Throwable t) {
+                        System.out.println(">>> [RawUnicorn] UC_HOOK_MEM_UNMAPPED FAILED: " + t);
+                        t.printStackTrace(System.out);
+                    }
+                }
+
+                // Plan E: CodeHook at 0x12037660 that re-protects the code page right before
+                // BLX R6 (0x12037662) re-enters the decrypted code region. This is the last
+                // possible moment to restore exec before FETCH_PROT fires — the mprotect happens
+                // somewhere in unidbg's host layer and does NOT go through emulator.getBackend().
+                // Write ARM BX LR stub at SINGLETON2 so BLX R12 returns to caller
+                try {
+                    // BX LR in ARM: 0xE12FFF1E — already written at SINGLETON2 above
+                    System.out.println(">>> Wrote BX LR stub at SINGLETON2 (0x7f003000)");
+                } catch (Throwable t) {
+                    System.out.println(">>> SINGLETON BX LR stub FAILED: " + t);
+                }
+
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        int hit;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            long r6 = b.reg_read(ArmConst.UC_ARM_REG_R6).longValue();
+                            long r12 = b.reg_read(ArmConst.UC_ARM_REG_R12).longValue();
+                            // Dump the actual data at R6+0x2d8 to see what the LDR reads
+                            long ptrAt2d8 = 0;
+                            long ptrAt2d4 = 0;
+                            long ptrAt2dc = 0;
+                            long ptrAt0 = 0;
+                            long ptrAt100 = 0;
+                            try {
+                                byte[] d2d8 = b.mem_read(r6 + 0x2d8, 4);
+                                ptrAt2d8 = (long)(d2d8[0] & 0xff) | ((long)(d2d8[1] & 0xff) << 8)
+                                    | ((long)(d2d8[2] & 0xff) << 16) | ((long)(d2d8[3] & 0xff) << 24);
+                                byte[] d2d4 = b.mem_read(r6 + 0x2d4, 4);
+                                ptrAt2d4 = (long)(d2d4[0] & 0xff) | ((long)(d2d4[1] & 0xff) << 8)
+                                    | ((long)(d2d4[2] & 0xff) << 16) | ((long)(d2d4[3] & 0xff) << 24);
+                                byte[] d2dc = b.mem_read(r6 + 0x2dc, 4);
+                                ptrAt2dc = (long)(d2dc[0] & 0xff) | ((long)(d2dc[1] & 0xff) << 8)
+                                    | ((long)(d2dc[2] & 0xff) << 16) | ((long)(d2dc[3] & 0xff) << 24);
+                                // Also dump R6+0 and R6+0x100
+                                byte[] d0 = b.mem_read(r6, 4);
+                                ptrAt0 = (long)(d0[0] & 0xff) | ((long)(d0[1] & 0xff) << 8)
+                                    | ((long)(d0[2] & 0xff) << 16) | ((long)(d0[3] & 0xff) << 24);
+                                byte[] d100 = b.mem_read(r6 + 0x100, 4);
+                                ptrAt100 = (long)(d100[0] & 0xff) | ((long)(d100[1] & 0xff) << 8)
+                                    | ((long)(d100[2] & 0xff) << 16) | ((long)(d100[3] & 0xff) << 24);
+                            } catch (Throwable t) {}
+                            if (hit < 3) {
+                                System.out.println(">>> [LastResortHook@0x12037660] R6=0x" + Long.toHexString(r6)
+                                    + " R12=0x" + Long.toHexString(r12)
+                                    + " [R6+0]=0x" + Long.toHexString(ptrAt0)
+                                    + " [R6+0x100]=0x" + Long.toHexString(ptrAt100)
+                                    + " [R6+0x2d4]=0x" + Long.toHexString(ptrAt2d4)
+                                    + " [R6+0x2d8]=0x" + Long.toHexString(ptrAt2d8)
+                                    + " [R6+0x2dc]=0x" + Long.toHexString(ptrAt2dc));
+                            }
+                            hit++;
+                            try {
+                                b.mem_protect(0x12038000L, 0x4000,
+                                    UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                                // Force R12 to SINGLETON2 (ARM mode, bit 0 = 0) — BX LR stub
+                                b.reg_write(ArmConst.UC_ARM_REG_R12, 0x7f003000L);
+                                // Force R0=0 so CBZ at 0x12037664 takes exit branch, skipping scan
+                                b.reg_write(ArmConst.UC_ARM_REG_R0, 0L);
+                            } catch (Throwable t) {
+                                System.out.println(">>> [LastResortHook] FAILED: " + t);
+                            }
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x12037660L, 0x12037660L, null);
+                    System.out.println(">>> Last-resort CodeHook installed at 0x12037660");
+                } catch (Throwable t) {
+                    System.out.println(">>> Last-resort CodeHook FAILED: " + t);
+                }
+
+                // Dump the bytes at 0x12037662 — last address before FETCH_PROT re-entry
+                try {
+                    byte[] dmp = backend.mem_read(0x12037660L, 12);
+                    StringBuilder sb = new StringBuilder();
+                    for (byte b : dmp) sb.append(String.format("%02x", b & 0xff));
+                    System.out.println(">>> CODE@0x12037660: " + sb);
+                } catch (Throwable t) {
+                    System.out.println(">>> CODE@0x12037660 read FAILED: " + t);
+                }
+
+                // Trace: CodeHook at 0x12037662 (BLX R12) and SINGLETON entry
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        public void hook(Backend b, long address, int size, Object user) {
+                            long r6 = b.reg_read(ArmConst.UC_ARM_REG_R6).longValue();
+                            long r12 = b.reg_read(ArmConst.UC_ARM_REG_R12).longValue();
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                            long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue();
+                            long r2 = b.reg_read(ArmConst.UC_ARM_REG_R2).longValue();
+                            long sp = b.reg_read(ArmConst.UC_ARM_REG_SP).longValue();
+                            System.out.println(">>> [trace@BLX_R12] R6=0x" + Long.toHexString(r6)
+                                + " R12=0x" + Long.toHexString(r12)
+                                + " LR=0x" + Long.toHexString(lr)
+                                + " R0=0x" + Long.toHexString(r0)
+                                + " R1=0x" + Long.toHexString(r1)
+                                + " R2=0x" + Long.toHexString(r2)
+                                + " SP=0x" + Long.toHexString(sp));
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x12037662L, 0x12037662L, null);
+                } catch (Throwable t) {
+                    System.out.println(">>> BLX_R12 trace hook FAILED: " + t);
+                }
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (hits++ < 8) {
+                                long insn = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                                System.out.println(">>> [trace@SINGLETON2+0x"
+                                    + Long.toHexString(address - 0x7f003000L)
+                                    + "] R0=0x" + Long.toHexString(insn));
+                                // Dump 4 bytes of code at this address
+                                try {
+                                    byte[] code = b.mem_read(address, 4);
+                                    StringBuilder sb = new StringBuilder();
+                                    for (byte x : code) sb.append(String.format("%02x", x & 0xff));
+                                    System.out.println(">>>   code: " + sb);
+                                } catch (Throwable t) {}
+                            }
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x7f003000L, 0x7f003fffL, null);
+                } catch (Throwable t) {
+                    System.out.println(">>> SINGLETON2 trace hook FAILED: " + t);
+                }
+
+                // Session 21: dump regs at 0x1203a6a0 — right before `blx r5` (0x1203a6a2)
+                // that branches to unmapped pages. r5=0x0 confirmed from log. Fix: force r5 to
+                // SINGLETON2 BX LR stub (0x7f003000) so `blx r5` returns immediately.
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        int n;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            // Always force r5 to SINGLETON2 BX LR stub — this is the fix
+                            b.reg_write(ArmConst.UC_ARM_REG_R5, 0x7f003000L);
+                            // Dump regs only first 3 hits for diagnosis
+                            if (n++ >= 3) return;
+                            StringBuilder sbh = new StringBuilder(">>> [3a6a0] regs (r5 FORCED to SINGLETON2):");
+                            int[] regs = {ArmConst.UC_ARM_REG_R0, ArmConst.UC_ARM_REG_R1, ArmConst.UC_ARM_REG_R2,
+                                    ArmConst.UC_ARM_REG_R3, ArmConst.UC_ARM_REG_R4, ArmConst.UC_ARM_REG_R5,
+                                    ArmConst.UC_ARM_REG_R6, ArmConst.UC_ARM_REG_R7, ArmConst.UC_ARM_REG_R8,
+                                    ArmConst.UC_ARM_REG_R9, ArmConst.UC_ARM_REG_R10, ArmConst.UC_ARM_REG_R11,
+                                    ArmConst.UC_ARM_REG_R12, ArmConst.UC_ARM_REG_LR, ArmConst.UC_ARM_REG_SP,
+                                    ArmConst.UC_ARM_REG_PC};
+                            String[] names = {"r0","r1","r2","r3","r4","r5","r6","r7","r8","sb(r9)","sl(r10)","fp(r11)","ip(r12)","lr","sp","pc"};
+                            for (int i = 0; i < regs.length; i++) {
+                                long v = b.reg_read(regs[i]).longValue();
+                                sbh.append(' ').append(names[i]).append("=0x").append(Long.toHexString(v));
+                            }
+                            System.out.println(sbh);
+                            // Dump bytes around 0x1203a6a0 — extended to 48 bytes to capture beyond CBZ skip
+                            try {
+                                byte[] code = b.mem_read(address - 8, 48);
+                                StringBuilder csb = new StringBuilder(">>> [3a6a0] code[-8..+40]: ");
+                                for (byte x : code) csb.append(String.format("%02x", x & 0xff));
+                                System.out.println(csb);
+                            } catch (Throwable t) {}
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x1203a6a0L, 0x1203a6a0L, null);
+                    System.out.println(">>> Regdump hook installed at 0x1203a6a0");
+
+                // Session 21: diagnostic hook at 0x1203a6b0 — right after CBZ skip, before the second bad branch
+                // LR=0x1203a6b5 from FETCH log indicates branch at 0x1203a6b2. Dump regs to find which has 0x0.
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        int n;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (n++ >= 2) return;
+                            StringBuilder sbh = new StringBuilder(">>> [6b0] regs (AFTER CBZ skip, pre-branch):");
+                            int[] regs = {ArmConst.UC_ARM_REG_R0, ArmConst.UC_ARM_REG_R1, ArmConst.UC_ARM_REG_R2,
+                                    ArmConst.UC_ARM_REG_R3, ArmConst.UC_ARM_REG_R4, ArmConst.UC_ARM_REG_R5,
+                                    ArmConst.UC_ARM_REG_R6, ArmConst.UC_ARM_REG_R7, ArmConst.UC_ARM_REG_R8,
+                                    ArmConst.UC_ARM_REG_R9, ArmConst.UC_ARM_REG_R10, ArmConst.UC_ARM_REG_R11,
+                                    ArmConst.UC_ARM_REG_R12, ArmConst.UC_ARM_REG_LR, ArmConst.UC_ARM_REG_SP,
+                                    ArmConst.UC_ARM_REG_PC};
+                            String[] names = {"r0","r1","r2","r3","r4","r5","r6","r7","r8","sb(r9)","sl(r10)","fp(r11)","ip(r12)","lr","sp","pc"};
+                            for (int i = 0; i < regs.length; i++) {
+                                long v = b.reg_read(regs[i]).longValue();
+                                sbh.append(' ').append(names[i]).append("=0x").append(Long.toHexString(v));
+                            }
+                            System.out.println(sbh);
+                            // Dump 64 bytes from 0x1203a6a0 to see full post-CBZ code
+                            try {
+                                byte[] code = b.mem_read(0x1203a6a0L, 64);
+                                StringBuilder csb = new StringBuilder(">>> [6b0] code[0x1203a6a0..+64]: ");
+                                for (byte x : code) csb.append(String.format("%02x", x & 0xff));
+                                System.out.println(csb);
+                            } catch (Throwable t) {}
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x1203a6b0L, 0x1203a6b0L, null);
+                    System.out.println(">>> Diagnostic hook installed at 0x1203a6b0");
+                } catch (Throwable t) {
+                    System.out.println(">>> 6b0 hook FAILED: " + t);
+                }
+
+                // Session 21 v2: safety-net hook at 0x1203a6b2 (BLX R0) — force R0 to SINGLETON2 BX LR stub.
+                // This catches any case where CBNZ doesn't skip AND the LDR+LDR path produces 0x0 in R0.
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        public void hook(Backend b, long address, int size, Object user) {
+                            // Force R0 to SINGLETON2 BX LR stub so BLX R0 returns safely
+                            b.reg_write(ArmConst.UC_ARM_REG_R0, 0x7f003000L);
+                            System.out.println(">>> [6b2] safety net: forced R0=0x7f003000");
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x1203a6b2L, 0x1203a6b2L, null);
+                    System.out.println(">>> Safety-net hook installed at 0x1203a6b2");
+                } catch (Throwable t) {
+                    System.out.println(">>> 6b2 hook FAILED: " + t);
+                }
+
+                // Session 21d: bypass at 0x12038240 — the anti-tamper BL that branches to 0x0.
+                // The instruction is `f003 f986 = BL target_that_evaluates_to_0x0`. Unlike BX/BLX
+                // to a register, forcing registers won't help — we skip the instruction entirely
+                // by writing the fall-through address (0x12038244) directly to PC. The hook also
+                // diagnoses instruction bytes and regs on first hit.
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        int n;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (n++ < 2) {
+                                try {
+                                    byte[] code = b.mem_read(address, 6);
+                                    StringBuilder csb = new StringBuilder(">>> [38240] code: ");
+                                    for (byte x : code) csb.append(String.format("%02x", x & 0xff));
+                                    System.out.println(csb);
+                                } catch (Throwable t) {}
+                                StringBuilder sbh = new StringBuilder(">>> [38240] regs:");
+                                int[] regs = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+                                String[] names = {"r0","r1","r2","r3","r4","r5","r6","r7","r8","r9","r10","r11","r12","sp","lr","pc"};
+                                for (int i = 0; i < regs.length; i++) {
+                                    long v = b.reg_read(regs[i]).longValue();
+                                    sbh.append(' ').append(names[i]).append("=0x").append(Long.toHexString(v));
+                                }
+                                System.out.println(sbh);
+                            }
+                            // Bypass: skip the BL by writing PC to the fall-through address (0x12038245 = Thumb bit set)
+                            b.reg_write(ArmConst.UC_ARM_REG_PC, 0x12038245L);
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x12038240L, 0x12038240L, null);
+                    System.out.println(">>> Safety-net hook installed at 0x12038240 (BL skip)");
+                } catch (Throwable t) {
+                    System.out.println(">>> 38240 hook FAILED: " + t);
+                }
+
+                // Session 21 v3: safety-net hook at 0x12038270 (BLX R0) — force R0 to SINGLETON2.
+                // After the 6b2 safety net returns, execution continues to another BLX R0 at 0x38270
+                // where R0 is also 0, triggering another FETCH-walk crash.
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        public void hook(Backend b, long address, int size, Object user) {
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                            if (r0 == 0) {
+                                b.reg_write(ArmConst.UC_ARM_REG_R0, 0x7f003000L);
+                                System.out.println(">>> [38270] safety net: R0 was 0, forced R0=0x7f003000");
+                            } else {
+                                System.out.println(">>> [38270] trace: R0=0x" + Long.toHexString(r0) + " (not zero, passing through)");
+                            }
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x12038270L, 0x12038270L, null);
+                    System.out.println(">>> Safety-net hook installed at 0x12038270");
+                } catch (Throwable t) {
+                    System.out.println(">>> 38270 hook FAILED: " + t);
+                }
+
+                // Session 21f: directly hook the scan BL at 0x1203767c (BL -> 0x1207b7d0).
+                // This is the actual memory-scan call that jumps through the veneer table
+                // to every 4KB page from 0x7b290 upward. We skip it: set R0=0 (not-found)
+                // and PC=0x12037681 (return address), short-circuiting the entire scan.
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        int n;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (n++ < 2) System.out.println(">>> [scan-kill@0x1203767c] nuking scan call #" + n);
+                            b.reg_write(ArmConst.UC_ARM_REG_R0, 0L);
+                            b.reg_write(ArmConst.UC_ARM_REG_PC, 0x12037681L);
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x1203767cL, 0x1203767cL, null);
+                    System.out.println(">>> Scan-kill hook installed at 0x1203767c");
+                } catch (Throwable t) {
+                    System.out.println(">>> Scan-kill hook FAILED: " + t);
+                }
+
+                } catch (Throwable t) {
+                    System.out.println(">>> 3a6a0 hook FAILED: " + t);
+                }
+
+                // N.l runs without bypass now — dispatch table calls go through SINGLETON
+                // BX LR stubs (0x7f003000). Let it complete its control flow naturally.
+
+                // Pre-N.l sanity: dump the regular decrypted-output landing zone
+                // (pattern so far: base+0xb2000 where base=max_premap_boundary).
+                // With 0x20000000 premap, candidate = 0x200b2000.
+                for (long probe : new long[]{0x100b2000L, 0x110b2000L, 0x200b2000L, 0x20101000L,
+                        0x11fb8000L, 0x11f01000L, 0x11ffe000L}) {
+                    try {
+                        byte[] buf = backend.mem_read(probe, 16);
+                        StringBuilder sb = new StringBuilder(">>> pre-N.l probe @0x" + Long.toHexString(probe) + ": ");
+                        for (byte x : buf) sb.append(String.format("%02x", x & 0xff));
+                        System.out.println(sb);
+                    } catch (Throwable t) {
+                        System.out.println(">>> pre-N.l probe @0x" + Long.toHexString(probe) + " FAILED: " + t);
+                    }
+                }
+
+                System.out.println(">>> calling N.l(Application, path) ...");
+                boolean nOk = false;
+                // Disable walk trace hooks during N.l to avoid Unicorn internal corruption
+                // from too many CodeHook callbacks during deep recursive decryption.
+                boolean savedJniPhase = jniPhase[0];
+                jniPhase[0] = false;
+                try {
+                    boolean lResult = N.callStaticJniMethodBoolean(emulator,
+                            "l(Landroid/app/Application;Ljava/lang/String;)Z",
+                            app, "/data/app/com.android.mgstv-1/base.apk");
+                    System.out.println(">>> N.l returned: "+lResult);
+                    nOk = true;
+                } catch (Throwable t) {
+                    System.out.println(">>> N.l threw: " + t);
+                }
+                jniPhase[0] = savedJniPhase;
+
+                // Post-N.l: dump candidate landing zones and scan for non-zero pages
+                for (long probe : new long[]{0x100b2000L, 0x110b2000L, 0x200b2000L, 0x20101000L,
+                        0x11fb8000L, 0x11f01000L, 0x11ffe000L}) {
+                    try {
+                        byte[] buf = backend.mem_read(probe, 16);
+                        StringBuilder sb = new StringBuilder(">>> post-N.l probe @0x" + Long.toHexString(probe) + ": ");
+                        for (byte x : buf) sb.append(String.format("%02x", x & 0xff));
+                        System.out.println(sb);
+                    } catch (Throwable t) {
+                        System.out.println(">>> post-N.l probe @0x" + Long.toHexString(probe) + " FAILED: " + t);
+                    }
+                }
+                // Broader scan: find any non-zero 4K pages in the 0x10000000-0x21000000 range
+                int nonZero = 0;
+                for (long pg = 0x10000000L; pg < 0x21000000L; pg += 0x1000L) {
+                    try {
+                        byte[] buf = backend.mem_read(pg, 4);
+                        int v = (buf[0] & 0xff) | ((buf[1] & 0xff) << 8)
+                              | ((buf[2] & 0xff) << 16) | ((buf[3] & 0xff) << 24);
+                        if (v != 0) {
+                            if (nonZero++ < 20) {
+                                System.out.println(">>> post-N.l non-zero page @0x" + Long.toHexString(pg)
+                                    + " first32=0x" + Integer.toHexString(v));
+                            }
+                        }
+                    } catch (Throwable t) { /* unmapped, skip */ }
+                }
+                System.out.println(">>> post-N.l scan: " + nonZero + " non-zero pages in 0x10000000-0x21000000");
+
+                if (nOk) {
+                    DvmObject<?> byteArray = new ByteArray(vm, ijiamiBytes);
                 DvmObject<?> b2bResult = N.callStaticJniMethodObject(emulator,
                         "b2b([BI)[B", byteArray, ijiamiBytes.length);
                 if (b2bResult instanceof ByteArray) {
@@ -1376,6 +2239,7 @@ public class Unpack extends AbstractJni {
                 } else {
                     System.out.println(">>> b2b returned: " + b2bResult);
                 }
+                } // end if (nOk)
             } catch (Throwable t) {
                 System.out.println(">>> decrypt call threw: ");
                 t.printStackTrace(System.out);
