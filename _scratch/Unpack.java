@@ -1584,6 +1584,35 @@ public class Unpack extends AbstractJni {
                     }
                 }
 
+                // Session 23 part 11: dump the next tier of candidates — the veneer-table
+                // trampoline cluster (16-byte PIC stubs, session 22) and the still-unexplored
+                // internal callees fed by the XOR-decrypted buffer, to keep chasing the
+                // mprotect self-nuke trigger.
+                for (long fnAddr : new long[]{
+                        0x1207b2d0L, 0x1207b2e0L, 0x1207b310L, 0x1207b640L,
+                        0x1207ba70L, 0x1207ba80L, 0x1207ba90L}) {
+                    try {
+                        byte[] fnBytes = backend.mem_read(fnAddr, 0x40);
+                        StringBuilder fsb = new StringBuilder();
+                        for (byte x : fnBytes) fsb.append(String.format("%02x", x & 0xff));
+                        System.out.println(">>> VENEER@0x" + Long.toHexString(fnAddr) + " window[0:0x40]: " + fsb);
+                    } catch (Throwable t) {
+                        System.out.println(">>> VENEER@0x" + Long.toHexString(fnAddr) + " dump FAILED: " + t);
+                    }
+                }
+                for (long fnAddr : new long[]{
+                        0x12025230L, 0x12025484L, 0x12037488L,
+                        0x120375fcL, 0x1203b684L, 0x1203b6f8L}) {
+                    try {
+                        byte[] fnBytes = backend.mem_read(fnAddr, 0x300);
+                        StringBuilder fsb = new StringBuilder();
+                        for (byte x : fnBytes) fsb.append(String.format("%02x", x & 0xff));
+                        System.out.println(">>> FN2@0x" + Long.toHexString(fnAddr) + " window[0:0x300]: " + fsb);
+                    } catch (Throwable t) {
+                        System.out.println(">>> FN2@0x" + Long.toHexString(fnAddr) + " dump FAILED: " + t);
+                    }
+                }
+
                 // Dump bytes around 0x12038270 — critical site where walk2 reaches but safety
                 // hook doesn't fire (meaning r0 != 0 there). Disassemble to understand why.
                 try {

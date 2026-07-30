@@ -1,4 +1,21 @@
-# Next Blocker — culprit narrowed to the veneer-table trampoline cluster, not found yet
+# Next Blocker — guest-code disasm exhausted along this path; mprotect likely host-side (unidbg), not guest ARM code
+
+## Update (session 23 part 11) — 7-agent sweep of the whole remaining call graph, mprotect not found in guest code
+
+Dumped and dispatched agents for: the 7-entry veneer-trampoline cluster, plus the 6 remaining unexplored internal callees (`0x12025230`/`0x12025484`, `0x120375fc`/`0x12037488`, `0x1203b684`/`0x1203b6f8`). This exhausts every call target flagged since part 9.
+
+**Veneer trampolines decoded precisely** (ARM-mode ADD/ADD/LDR long-branch glue, one agent did the exact immediate-rotate arithmetic): all 7 resolve to pointer-table slots in a tight span, `0x1208244c`–`0x1208263c`, incrementing by exactly 4 bytes per "over-read" copy — confirming these dispatch through the **same ctor-skipped pointer table** (`0x12082340` region) already responsible for this session's other two fixed bugs. We haven't dumped the *contents* of those specific slots yet.
+
+**All 6 internal callees disassembled, none contain the mprotect call:**
+- `0x12025230`/`0x12025484` — crypto plumbing: a CRC/hash-style digest loop and CBC-style block XOR chaining with pad-stripping. No SVC, no page-size constant. Not it.
+- `0x120375fc`/`0x12037488` — a **mutually-recursive pair** (each calls the other) that matches the old "NewObjectV triggers re-entry" comment almost exactly: sequence-lock/reentrancy guards, six JNI-vtable-shaped indirect calls per function (offsets 0x24/0x34/0x44/0x54/0x98/0x18c off an env-like pointer), a byte-XOR name-decode loop, calls into the crypto pair above to resolve/cache a class or method ID. No SVC, no page-size constant either — but structurally this is exactly the code path the self-nuke should live behind.
+- `0x1203b684`/`0x1203b6f8` — turned out to be **one function** (the `0x1203b684` capture starts mid-literal-pool, real entry is `0x1203b6f8`). **Contains real SVCs** — `svc #0` with `r7=0x14` (`getpid`) and `r7=0x25` (`kill`) — but it's an **anti-tamper self-destruct switch** (`kill(getpid(), SIGABRT)` then `kill(getpid(), SIGKILL)`), gated behind a flag byte and two vtable calls. Not memory-protection code. No `r7=0x7d` (mprotect's syscall number) anywhere.
+
+## Conclusion for this thread of investigation
+
+**Zero guest-code SVCs with mprotect's syscall number (125/`0x7d`) exist anywhere in the ~10 functions traced this session.** Combined with session 21's own earlier note — *"SVC-based InterruptHook doesn't fire because unidbg's ARM32SyscallHandler wraps the mprotect from host code, not from a unicorn SVC"* — the likely explanation is that **the actual mprotect call is not guest ARM code at all**. It's plausibly unidbg's own Java-side memory manager doing it internally as a side effect of handling the JNI `NewObjectV` call (or similar), triggered from the *host* runtime rather than anything emulated. If that's right, no amount of further guest-code disassembly will find it — the search needs to move to a different layer entirely (hooking unidbg's own DVM/class-loading Java methods, or instrumenting `Memory.mprotect` calls at the host level, rather than tracing more ARM call graphs).
+
+**Session checkpoint**: 20 remote runs, 11 parts, 7 parallel agents in the final sweep (10 agents total this session). Two real bugs found and fixed (`0x7b290` table-walk, `SINGLETON+0x1a4` double-indirection — SINGLETON2 dispatch count 0→3), a genuine anti-tamper kill-switch mechanism discovered as a bonus, and this specific EXEC-loss investigation now correctly reframed as "wrong layer" rather than "wrong address" — a materially different, harder problem than more disassembly can solve. This is the natural stopping point for this session.
 
 ## Update (session 23 part 10) — 3 parallel agents dumped and disassembled all 3 candidates
 
@@ -66,10 +83,10 @@ cd C:/Users/Nestor/Workspace/Xuper/XuperPlugin
 python _scratch/run_lever_remote2.py
 ```
 
-## Next steps (updated, part 10)
+## Next steps (updated, part 11 — pivot away from guest-code disasm)
 
-1. **Chase the veneer trampolines to their real targets.** The most promising unexplored lead: dump `0x1207b2d0`, `0x1207b2e0`, `0x1207b310`, `0x1207b640`, `0x1207ba70`, `0x1207ba80`, `0x1207ba90` (16 bytes each, or a bit more to see where each trampoline actually jumps) and follow the chain — these are veneer-table PIC stubs (session 22), and one of them likely lands on the real `mprotect`-equivalent call.
-2. **Or dump the still-unexplored non-veneer callees**: `0x12025230`, `0x12025484`, `0x12037488`, `0x120375fc`, `0x1203b684`, `0x1203b6f8` — called with the XOR-decrypted buffer, plausible candidates for "resolve and call NewObjectV with the decrypted class name."
-3. Per session 21's own notes: the mprotect "wraps... from host code, not from a unicorn SVC" — meaning if it's not found in any guest-code call, it may be unidbg's own Java-side memory manager doing it as a side effect of something (still worth checking whether the existing `blx r3` NOP at `0x12038226` is upstream of this specific fault or not — confirmed applied every run, but the self-nuke still happens).
-4. `SINGLETON2 dispatch count` is the best available progress metric right now (0→2→3 across this session's two real fixes) — any future fix attempt should be checked against whether it moves that number.
-5. **Consider whether this is even a bug** — decrypt-execute-reprotect is a legitimate, common packer defense. If so, the fix isn't "stop it from re-protecting" but "re-trigger whatever decrypt step populates this page before every re-entry" — a materially different, harder problem than a permission patch. Worth deciding which case this is before investing more time chasing trampolines.
+1. **Stop chasing guest ARM call graphs for this specific bug.** 10 functions traced across 2 rounds of parallel agents, zero mprotect-numbered SVCs found. Diminishing returns on this approach — the veneer-table slots (`0x1208244c`-`0x1208263c`) are the only unexplored guest-code lead left, and they resolve into the same broken pointer table, not obviously a syscall site.
+2. **Switch to host-level instrumentation.** If unidbg's own Java memory manager does the mprotect internally (per session 21's note), the way to catch it is a Java-side hook: add logging/breakpoints around unidbg's `Memory`/DVM class-loading code paths (particularly whatever handles `NewObjectV` or JNI object construction) rather than more ARM disassembly. Look at unidbg's source (or decompile the JAR if source isn't available on the remote box) for where `Memory.mprotect`/`Backend.mem_protect` gets called from JNI-handling code, and add a stack-trace dump at that call site.
+3. **Alternative pivot: accept it and re-trigger instead of prevent.** If this really is decrypt-execute-reprotect packer behavior (a live possibility, not yet ruled out), stop trying to stop the reprotect and instead figure out what re-populates/re-decrypts this page on a fresh call, then trigger that ourselves before the second entry to `0x120381c0`.
+4. `SINGLETON2 dispatch count` remains the best available progress metric (0→2→3 across this session's two real fixes) — any future fix attempt should be checked against whether it moves that number further.
+5. Bonus finding worth remembering for later: `0x1203b6f8` is a genuine anti-tamper kill-switch (`kill(getpid(), SIGABRT)` → `kill(getpid(), SIGKILL)`), gated behind a flag byte at `ctx+0x188` and two vtable calls. Not relevant to this bug, but worth knowing it exists if future runs start dying with SIGABRT/SIGKILL instead of the usual exceptions.
