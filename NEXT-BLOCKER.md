@@ -1,4 +1,27 @@
-# Next Blocker — EXEC loss is NOT our dynamic protect churn (bisected); static-protect region-split still a suspect
+# Next Blocker — static-protect region-split RULED OUT (part 17); JNI-dispatch angle is the live lead
+
+## Update (session 23 part 17) — dropped the lone static protect, crash byte-identical → region-split DEAD; pivot to JNI
+
+Part 16 cleared our dynamic protect churn and left exactly one suspect: the single static `mem_protect(0x120381c0 & ~0xfff, 0x2000, RWX)` right before N.l (`Unpack.java:1680`), a 0x2000 sub-range of the larger libexec segment (module base `0x12000000`) — the Unicorn region-split theory.
+
+Gated it behind a new flag `BISECT_NO_STATIC_PROTECT = true` (Unpack.java:39) and ran on `.40`.
+
+**Result: byte-for-byte identical crash** (`p17.log` on .40). Marker `[BISECT p17] static pre-N.l protect DISABLED` fired at line 694, then line 771:
+```
+RX@0x120381c1[libexec.so]0x381c1 ... UC_ERR_FETCH_PROT ...
+address=0x120381c1, arguments=[unidbg@0xfffe12a0, 1064202203, 914356853, 1359953204]
+```
+Same PC, same FETCH_PROT, same dispatch count 3. **The static protect was a no-op** — it neither caused the EXEC loss nor masked it (crash did NOT move earlier). **Region-split hypothesis is ruled out.** The flag stays `true` (proven irrelevant; leaving it on removes the dead sub-range protect for good).
+
+**New live lead (the pivot):** the faulting call's `arg[0] = 0xfffe12a0` sits inside the JNI SVC-stub region (`0xfffeXXXX`). The function crashing at `0x120381c1` is being handed a **JNIEnv-shaped pointer** — direct evidence the JNI-dispatch branch (reopened by the part-15 audit) is where the EXEC-loss trigger lives. This is now the top hypothesis, not just "not ruled out."
+
+**Next step = #2, being built this session (part 18):** JNI SVC hooks done correctly —
+- install the 8 env-function hooks BEFORE `JNI_OnLoad`/init (part 14 installed them after; that's why it saw zero hits)
+- positive-control the FindClass hook against the known init call (log lines 409-413) before trusting any zero-hit result
+- hook a small range `stub_base .. stub_base+8`, not a single address (the `Unpack.java:819` note shows FindClass fires at base **+4**)
+- goal: identify which JNI fn fires immediately before `0x120381c1`, and whether its SVC handler triggers a host-side mprotect that strips EXEC from `0x12038000`.
+
+---
 
 ## Update (session 23 part 16) — bisection: disabled all our dynamic mem_protect on 0x12038000, crash IDENTICAL
 

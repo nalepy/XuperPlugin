@@ -32,6 +32,12 @@ public class Unpack extends AbstractJni {
     // Isolates whether OUR inconsistent-size protect calls fragment the page's exec perms.
     static final boolean BISECT_NO_DYNAMIC_PROTECT = true;
 
+    // Session 23 part 17 BISECT: after part 16 cleared our dynamic protect churn, isolate the
+    // LONE remaining static pre-N.l protect (mem_protect on a 0x2000 sub-range of the larger
+    // libexec segment mapped at module base) — the region-split suspect. When true, that protect
+    // is skipped so the page's raw EXEC state at N.l is observed unmodified.
+    static final boolean BISECT_NO_STATIC_PROTECT = true;
+
     private DvmObject<?> mMockActivityThread;
     private DvmObject<?> mMockAppBindData;
     private DvmObject<?> mMockApplicationInfo;
@@ -1677,9 +1683,13 @@ public class Unpack extends AbstractJni {
                     for (int i = 0; i < 64 && i < pageBytes.length; i++)
                         sb.append(String.format("%02x", pageBytes[i] & 0xff));
                     System.out.println(">>> PAGE@0x12038000 before N.l: " + sb);
-                    backend.mem_protect(0x120381c0L & ~0xfff, 0x2000,
-                            UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
-                    System.out.println(">>> PAGE@0x12038000 re-protected EXEC before N.l");
+                    if (!BISECT_NO_STATIC_PROTECT) {
+                        backend.mem_protect(0x120381c0L & ~0xfff, 0x2000,
+                                UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                        System.out.println(">>> PAGE@0x12038000 re-protected EXEC before N.l");
+                    } else {
+                        System.out.println(">>> [BISECT p17] static pre-N.l protect DISABLED — observing raw EXEC state");
+                    }
                     // Session 23 part 7: dump the window around 0x12038273 (offset 0x200-0x2ff)
                     // as one hex blob so it can be disassembled offline with capstone, without
                     // needing another remote round-trip. This is the read site misinterpreting
