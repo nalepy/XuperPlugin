@@ -27,6 +27,9 @@ import java.util.LinkedHashSet;
 
 public class Unpack extends AbstractJni {
 
+    // Map FindClass return handle -> class name (for RegisterNatives correlation).
+    final java.util.Map<Long,String> findClassNameMap = new java.util.concurrent.ConcurrentHashMap<>();
+
     // Session 23 part 16 BISECT: when true, disable all dynamic (per-hook) mem_protect/
     // mem_map churn on page 0x12038000 — leaving only ONE clean static protect before N.l.
     // Isolates whether OUR inconsistent-size protect calls fragment the page's exec perms.
@@ -187,6 +190,20 @@ public class Unpack extends AbstractJni {
         };
     }
 
+    // Read a little-endian 32-bit value from a 4-byte array.
+    private static long le32val(byte[] b4) {
+        return (b4[0] & 0xff) | ((b4[1] & 0xff) << 8)
+             | ((b4[2] & 0xff) << 16) | ((b4[3] & 0xff) << 24);
+    }
+
+    // Read a NUL-terminated C string from guest memory (max maxLen bytes).
+    private static String readCString(Backend b, long addr, int maxLen) {
+        byte[] raw = b.mem_read(addr, maxLen);
+        int end = 0;
+        while (end < raw.length && raw[end] != 0) end++;
+        return new String(raw, 0, end);
+    }
+
     // Trace-only diagnostic hook: prints a label (+ optional register value) up to 8 times,
     // only while jniPhase is active. regConst < 0 means "just print the label, no register".
     private static void addTrace(final Backend backend, final boolean[] jniPhase, long addr,
@@ -261,6 +278,18 @@ public class Unpack extends AbstractJni {
                 (byte) 0x70, (byte) 0x47  // bx lr
         });
         System.out.println(">>> VTABLE_STUB written @0x" + Long.toHexString(VTABLE_STUB));
+        // p27c: VTABLE_STUB2 — same as VTABLE_STUB but ALSO writes r0 to *r1 (the result slot)
+        // before returning. This is what cE's resolver expects: the callback writes the resolved
+        // jobject handle to *r1 (=sp+8 in cE), and cE returns sp[8]. With VTABLE_STUB2, cE returns
+        // 1 (non-zero) -> cB's cbz unblocks -> cB's vtable[0] dispatch fires (also our stub) and
+        // returns cleanly. Thumb: movs r0,#1 (0120); str r0,[r1] (0860); bx lr (7047).
+        final long VTABLE_STUB2 = SCRATCH + 0x810;
+        backend.mem_write(VTABLE_STUB2, new byte[]{
+                (byte) 0x01, (byte) 0x20, // movs r0, #1
+                (byte) 0x08, (byte) 0x60, // str r0, [r1]
+                (byte) 0x70, (byte) 0x47  // bx lr
+        });
+        System.out.println(">>> VTABLE_STUB2 (writes *r1=1) written @0x" + Long.toHexString(VTABLE_STUB2));
         // Absorb null+offset reads (e.g. [0x109] during JNI) instead of UC_ERR_READ_UNMAPPED
         try {
             backend.mem_map(0L, 0x1000, UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE);
@@ -506,7 +535,7 @@ public class Unpack extends AbstractJni {
         // If real, these are the ACTUAL RegisterNatives(env, clazz, methods, nMethods) calls -
         // BEFORE the kill()-anti-tamper region, not after. Trace args + real return value
         // (don't override anything - let unidbg's own JNIEnv handle it for real).
-        for (final long callAddr : new long[]{0x12037a16L, 0x12037a72L}) {
+        for (final long callAddr : new long[]{0x1203795cL, 0x120379baL, 0x12037a16L, 0x12037a72L}) {
             backend.hook_add_new(new CodeHook() {
                 int n;
                 public void hook(Backend b, long address, int size, Object user) {
@@ -521,7 +550,44 @@ public class Unpack extends AbstractJni {
                             + " env(r0)=0x" + Long.toHexString(r0)
                             + " clazz(r1)=0x" + Long.toHexString(r1)
                             + " methods(r2)=0x" + Long.toHexString(r2)
-                            + " nMethods(r3)=0x" + Long.toHexString(r3));
+                            + " nMethods(r3)=" + r3);
+                    // Look up the class name from the FindClass handle→name map.
+                    String clazzName = findClassNameMap.get(r0 & 0xffffffffL);
+                    if (clazzName == null) clazzName = "<unknown — FindClass didn't log this handle>";
+                    System.out.println(">>> [p25 RN class] clazz handle=0x" + Long.toHexString(r1)
+                        + " (FindClass env r0=0x" + Long.toHexString(r0) + ") -> class name not directly mapped; "
+                        + "trying findClassNameMap for r1=" + Long.toHexString(r1));
+                    // The clazz handle is r1 (the jclass arg), not r0 (the env). FindClass's
+                    // RETURN value is the jclass handle. We stashed handle→name keyed by r0 at
+                    // FindClass return time, but that r0 is the jclass=return. However, our
+                    // FindClass hook logs r0=env on ENTRY (pc=0xfffe00b0) and r0=jclass on the
+                    // +4 pass (pc=0xfffe00b4). The +4 pass's r0 IS the jclass handle. So
+                    // findClassNameMap should be keyed by the +4-pass r0. Let's just try both.
+                    clazzName = findClassNameMap.get(r1);
+                    if (clazzName == null) clazzName = "<unknown>";
+                    System.out.println(">>> [p25 RN class name] '" + clazzName + "'");
+                    // Dump each JNINativeMethod entry: {char* name, char* sig, void* fnPtr} = 12 bytes
+                    int count = (int) r3;
+                    for (int i = 0; i < count; i++) {
+                        long entryAddr = r2 + (long) i * 12L;
+                        try {
+                            byte[] entry = b.mem_read(entryAddr, 12);
+                            long namePtr  =  (entry[0] & 0xff)        | ((entry[1] & 0xff) << 8)
+                                          | ((entry[2] & 0xff) << 16) | ((entry[3] & 0xff) << 24);
+                            long sigPtr   =  (entry[4] & 0xff)        | ((entry[5] & 0xff) << 8)
+                                          | ((entry[6] & 0xff) << 16) | ((entry[7] & 0xff) << 24);
+                            long fnPtr    =  (entry[8] & 0xff)        | ((entry[9] & 0xff) << 8)
+                                          | ((entry[10] & 0xff) << 16)| ((entry[11] & 0xff) << 24);
+                            String name = "?", sig = "?";
+                            try { name = readCString(b, namePtr, 64); } catch (Throwable t) { name = "ERR:" + t; }
+                            try { sig = readCString(b, sigPtr, 128); } catch (Throwable t) { sig = "ERR:" + t; }
+                            System.out.println(">>> [RN entry #" + i + "] name='" + name
+                                + "' sig='" + sig + "' fnPtr=0x" + Long.toHexString(fnPtr));
+                        } catch (Throwable t) {
+                            System.out.println(">>> [RN entry #" + i + "] read FAILED @0x"
+                                + Long.toHexString(entryAddr) + ": " + t);
+                        }
+                    }
                 }
                 public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
                 public void detach() {}
@@ -1098,6 +1164,17 @@ public class Unpack extends AbstractJni {
                                     + " r2=0x" + Long.toHexString(r2)
                                     + (nearCrash ? "  <<< NEAR 0x12038 CRASH WINDOW" : ""));
                             }
+                            // For FindClass, dump the class name string at r1, and stash the
+                            // returned handle→name mapping for RegisterNatives correlation.
+                            if (name.equals("FindClass") && (n <= 8 || nearCrash)) {
+                                try {
+                                    String cls = readCString(b, r1, 128);
+                                    System.out.println(">>> [p25 FindClass name] '" + cls + "'");
+                                    findClassNameMap.put(r0, cls);
+                                } catch (Throwable t) {
+                                    System.out.println(">>> [p25 FindClass name] read @0x" + Long.toHexString(r1) + " FAILED: " + t);
+                                }
+                            }
                         }
                         public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
                         public void detach() {}
@@ -1470,6 +1547,34 @@ public class Unpack extends AbstractJni {
             if (jniVal == 0x00010006L) {
                 System.out.println(">>> JNI_OnLoad SUCCESS (JNI_VERSION_1_6)");
             }
+            // p25: Dump the packer's vtable chain AFTER JNI_OnLoad, BEFORE harness overwrite.
+            // This tells us what the packer's init actually wrote to the global pointer.
+            try {
+                long p = 0x12082340L;
+                byte[] b4;
+                b4 = backend.mem_read(p, 4); long post_v1 = le32val(b4);
+                System.out.println(">>> [p25 POST-JNI] *0x12082340=0x" + Long.toHexString(post_v1));
+                if (post_v1 != 0) {
+                    b4 = backend.mem_read(post_v1, 4); long post_v2 = le32val(b4);
+                    System.out.println(">>> [p25 POST-JNI] *P1(0x"+Long.toHexString(post_v1)+")=0x" + Long.toHexString(post_v2));
+                    if (post_v2 != 0) {
+                        b4 = backend.mem_read(post_v2 + 0x10, 4); long post_vt = le32val(b4);
+                        System.out.println(">>> [p25 POST-JNI] *(P2(0x"+Long.toHexString(post_v2)+")+0x10)=0x" + Long.toHexString(post_vt));
+                        if (post_vt != 0) {
+                            // Dump vtable slots 0x00 through 0x1c0
+                            StringBuilder vts = new StringBuilder();
+                            for (int off = 0; off <= 0x1c0; off += 4) {
+                                b4 = backend.mem_read(post_vt + off, 4);
+                                long sv = le32val(b4);
+                                if (sv != 0) vts.append(String.format("  +0x%02x=0x%08x", off, sv));
+                            }
+                            System.out.println(">>> [p25 POST-JNI] vtable non-zero slots:" + vts.toString());
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                System.out.println(">>> [p25 POST-JNI] vtable chain dump failed: " + t);
+            }
             // Post-call decrypted-code dumps for offline capstone disasm (ctors have run by now).
             // Note: gap region 0x120378dc-0x120379cf added to find the 2nd FindClass call site (LR=0x1203799b in crash)
             for (long[] range : new long[][]{{0x12037090L, 0x60}, {0x12037b40L, 0xa0}, {0x12037a80L, 0x60},
@@ -1489,6 +1594,8 @@ public class Unpack extends AbstractJni {
                     {0x12039400L, 0x200},  // b2b code region — 0x12039458 is entry point, capture for disasm
                     {0x12037660L, 0x20},   // dispatch table: LDR R12,[R6,#?]/BLX R12 pair at 0x12037660-2 — see why R12=0
                     {0x1203b570L, 0x40},   // dispatch at 0x1203b577 — LR from every fetch miss; see what branches to decrypted pages
+                    {0x1203a848L, 0x300},  // p27g: function called at 0x12038298 — crashes inside with nested Function32 re-entry
+                    {0x120372e4L, 0x80},   // p27t: called at 0x120382de — crash moved inside this one
                     }) {
                 try {
                     long ea = range[0];
@@ -1626,6 +1733,14 @@ public class Unpack extends AbstractJni {
                             long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
                             System.out.println(">>> [fn@0x120381c0 entry #" + n + "] called from LR=0x"
                                     + Long.toHexString(lr));
+                            // Re-assert RWX on the entry page here — the Function32 re-entry
+                            // (detected parts 20-22) faults because unidbg's nested dispatch
+                            // sees the page without EXEC. By re-protecting on every successful
+                            // entry we keep the page executable for subsequent re-entries.
+                            try {
+                                b.mem_protect(0x12038000L, 0x2000,
+                                    UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                            } catch (Throwable t) { /* best effort */ }
                         }
                         public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
                         public void detach() {}
@@ -1729,22 +1844,42 @@ public class Unpack extends AbstractJni {
                     t.printStackTrace(System.out);
                 }
 
-                // Write the SINGLETON address into the binary's pointer table so code that loads
-                // from 0x12082340 gets a struct pointer (not the BX LR stub address).
-                byte[] singDataPtr = new byte[] {
-                    (byte)(SINGLETON & 0xff), (byte)((SINGLETON>>8)&0xff),
-                    (byte)((SINGLETON>>16)&0xff), (byte)((SINGLETON>>24)&0xff)
-                };
-                backend.mem_write(0x12082340L, singDataPtr);
-                byte[] vtPtr = new byte[] {
-                    (byte)(VTABLE & 0xff), (byte)((VTABLE>>8)&0xff),
-                    (byte)((VTABLE>>16)&0xff), (byte)((VTABLE>>24)&0xff)
-                };
-                backend.mem_write(0x120868e0L, vtPtr);
-                for (int i = 0; i < 64; i++) {
-                    backend.mem_write(VTABLE + i*4, new byte[]{0,0,0,0});
+                // p26 EXPERIMENT: Do NOT force-write SINGLETON over the packer's real pointer chain.
+                // The packer's JNI_OnLoad already populated 0x12082340 -> 0x120868e0 -> 0x120868f0
+                // with real data (verified by the POST-JNI dump). The FORCE-WROTE destroys this.
+                // Instead, keep the packer's real chain. The SINGLETON page and its hooks stay mapped
+                // for any code that still reads through them, but the primary chain at 0x12082340
+                // is left untouched.
+                final boolean FORCE_WRITE_SINGLETON = false;
+                if (FORCE_WRITE_SINGLETON) {
+                    byte[] singDataPtr = new byte[] {
+                        (byte)(SINGLETON & 0xff), (byte)((SINGLETON>>8)&0xff),
+                        (byte)((SINGLETON>>16)&0xff), (byte)((SINGLETON>>24)&0xff)
+                    };
+                    backend.mem_write(0x12082340L, singDataPtr);
+                    byte[] vtPtr = new byte[] {
+                        (byte)(VTABLE & 0xff), (byte)((VTABLE>>8)&0xff),
+                        (byte)((VTABLE>>16)&0xff), (byte)((VTABLE>>24)&0xff)
+                    };
+                    backend.mem_write(0x120868e0L, vtPtr);
+                    for (int i = 0; i < 64; i++) {
+                        backend.mem_write(VTABLE + i*4, new byte[]{0,0,0,0});
+                    }
+                    System.out.println(">>> FORCE-WROTE singleton/vtable");
+                } else {
+                    System.out.println(">>> [p26] SINGLETON force-write DISABLED — keeping packer's real chain");
+                    // Re-verify the chain is intact
+                    try {
+                        byte[] b4 = backend.mem_read(0x12082340L, 4);
+                        long v1 = le32val(b4);
+                        b4 = backend.mem_read(v1, 4);
+                        long v2 = le32val(b4);
+                        System.out.println(">>> [p26] chain: *0x12082340=0x"+Long.toHexString(v1)
+                            + " *P1=0x"+Long.toHexString(v2));
+                    } catch (Throwable t) {
+                        System.out.println(">>> [p26] chain verify failed: " + t);
+                    }
                 }
-                System.out.println(">>> FORCE-WROTE singleton/vtable");
 
                 byte[] ijiamiBytes = java.nio.file.Files.readAllBytes(
                         new File("/tmp/apkx/assets/ijiami.dat").toPath());
@@ -2034,9 +2169,401 @@ public class Unpack extends AbstractJni {
                     }
                 }
 
+                // p27: WriteHooks on the FULL pointer chain — 0x12082340 (GOT), 0x120868e0 (P1),
+                // 0x120868f0 (P2), 0x12086900 (P2+0x10 = vtable ptr). N.l zeroes P1 once at
+                // 0x1203827c. Note: unidbg WriteHook fires BEFORE the write lands, so the value
+                // check approach fails — restore unconditionally.
+                try {
+                    final int[] chainWrites = {0};
+                    final long[] chainAddrs = {0x12082340L, 0x120868e0L, 0x120868f0L, 0x12086900L};
+                    for (final long ca : chainAddrs) {
+                        backend.hook_add_new(new WriteHook() {
+                            public void hook(Backend backend2, long address, int size, long value, Object user) {
+                                int n = ++chainWrites[0];
+                                long pc = 0;
+                                try { pc = backend2.reg_read(ArmConst.UC_ARM_REG_PC).longValue() & 0xffffffffL; } catch (Throwable t) {}
+                                if (n <= 20)
+                                    System.out.println(">>> [p27 WRITE@" + Long.toHexString(ca) + "] hit #" + n
+                                        + " size=" + size + " value=0x" + Long.toHexString(value)
+                                        + " PC=0x" + Long.toHexString(pc));
+                                // WriteHook fires BEFORE the write, so restore AFTER: schedule the
+                                // restore via a CodeHook at the instruction after the writer. For the
+                                // known writer (0x1203827c str.w r0,[fp]) the next instr is 0x12038280.
+                                if (pc == 0x1203827cL) {
+                                    try {
+                                        backend2.mem_write(0x120868e0L, le32(0x120868f0L));
+                                        if (n <= 20)
+                                            System.out.println(">>> [p27 RESTORE] *0x120868e0 -> 0x120868f0");
+                                    } catch (Throwable t) {
+                                        if (n <= 20) System.out.println(">>> [p27 RESTORE] FAILED: " + t);
+                                    }
+                                }
+                            }
+                            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                            public void detach() {}
+                        }, ca, ca, null);
+                    }
+                    // Belt-and-suspenders: CodeHook at 0x12038280 (the instr AFTER the str.w r0,[fp])
+                    // that restores P1 every time it executes, so cB/cC/cE always see the intact chain.
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            int n = ++hits;
+                            try {
+                                b.mem_write(0x120868e0L, le32(0x120868f0L));
+                                if (n <= 8)
+                                    System.out.println(">>> [p27 POST-STR@0x12038280] restored *0x120868e0=0x120868f0 (hit #" + n + ")");
+                            } catch (Throwable t) {
+                                if (n <= 8) System.out.println(">>> [p27 POST-STR] FAILED: " + t);
+                            }
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x12038280L, 0x12038280L, null);
+                    System.out.println(">>> [p27] WriteHooks on chain + post-str restore @0x12038280 installed");
+                } catch (Throwable t) {
+                    System.out.println(">>> [p27] WriteHook install FAILED: " + t);
+                }
+                // p27f: N.l's phase-2 loop re-enters its own body at 0x120381ea (the `beq 0x120381ea`
+                // after cC). The re-entry is what faults FETCH_PROT (nested Function32 dispatch sees
+                // the page without EXEC — host-side strip). Re-assert RWX at the loop-back target and
+                // at the entry so every re-entry lands on an executable page.
+                try {
+                    for (long loopAddr : new long[]{0x120381eaL, 0x120381c0L}) {
+                        backend.hook_add_new(new CodeHook() {
+                            int hits;
+                            public void hook(Backend b, long address, int size, Object user) {
+                                if (++hits > 50) return;
+                                try {
+                                    b.mem_protect(0x12038000L, 0x2000,
+                                        UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                                    if (hits <= 6)
+                                        System.out.println(">>> [p27f loop@0x" + Long.toHexString(address)
+                                            + "] RWX re-asserted (hit #" + hits + ")");
+                                } catch (Throwable t) {
+                                    if (hits <= 6) System.out.println(">>> [p27f loop] re-assert FAILED: " + t);
+                                }
+                            }
+                            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                            public void detach() {}
+                        }, loopAddr, loopAddr, null);
+                    }
+                    System.out.println(">>> [p27f] loop-back RWX re-assert hooks installed (0x120381ea, 0x120381c0)");
+                } catch (Throwable t) {
+                    System.out.println(">>> [p27f] loop hooks FAILED: " + t);
+                }
+                // p27g: hook 0x1203a848 (called at 0x12038298, right before the phase-2 crash)
+                // and the region between 0x12038291 and 0x120382a8 to pinpoint the crash site.
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (++hits > 4) return;
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue() & 0xffffffffL;
+                            long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue() & 0xffffffffL;
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue() & 0xffffffffL;
+                            System.out.println(">>> [p27g @0x12038298 bl 0x1203a848] r0=0x" + Long.toHexString(r0)
+                                + " r1=0x" + Long.toHexString(r1) + " lr=0x" + Long.toHexString(lr));
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x12038298L, 0x12038298L, null);
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (++hits > 4) return;
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue() & 0xffffffffL;
+                            System.out.println(">>> [p27g @0x1203a848 entry] lr=0x" + Long.toHexString(lr)
+                                + " r0=0x" + Long.toHexString(b.reg_read(ArmConst.UC_ARM_REG_R0).longValue() & 0xffffffffL));
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x1203a848L, 0x1203a848L, null);
+                    System.out.println(">>> [p27g] crash-region hooks installed");
+                } catch (Throwable t) {
+                    System.out.println(">>> [p27g] hook FAILED: " + t);
+                }
+                // p27e: DIAGNOSTIC — dump sl/fp and dispatch targets at N.l init phase 2.
+                // 0x120382a8: ldr.w r0,[sl]; ldr r2,[r0,#0x54]; blx r2 (vtable[0x54])
+                // 0x120382b8: ldr r0,[r1,#0x10]; ldr r2,[r0,#0x60]; blx r2 (vtable[0x60])
+                // 0x120382d8: ldr.w r0,[r1,#0x1b8]; blx r0 (vtable[0x1b8])
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (++hits > 4) return;
+                            long sl = b.reg_read(ArmConst.UC_ARM_REG_R9).longValue() & 0xffffffffL;
+                            long fp = b.reg_read(ArmConst.UC_ARM_REG_R11).longValue() & 0xffffffffL;
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue() & 0xffffffffL;
+                            long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue() & 0xffffffffL;
+                            long r2 = b.reg_read(ArmConst.UC_ARM_REG_R2).longValue() & 0xffffffffL;
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue() & 0xffffffffL;
+                            StringBuilder sb = new StringBuilder(">>> [p27e @0x" + Long.toHexString(address) + "]"
+                                + " sl=0x" + Long.toHexString(sl)
+                                + " fp=0x" + Long.toHexString(fp)
+                                + " r0=0x" + Long.toHexString(r0)
+                                + " r1=0x" + Long.toHexString(r1)
+                                + " r2=0x" + Long.toHexString(r2)
+                                + " lr=0x" + Long.toHexString(lr));
+                            // Dereference what we can
+                            try {
+                                if (sl != 0) { byte[] d = b.mem_read(sl, 4); sb.append(" [*sl]=0x" + Long.toHexString(le32val(d))); }
+                                if (fp != 0) { byte[] d = b.mem_read(fp, 4); sb.append(" [*fp]=0x" + Long.toHexString(le32val(d))); }
+                                if (r0 != 0) { byte[] d = b.mem_read(r0, 4); sb.append(" [*r0]=0x" + Long.toHexString(le32val(d))); }
+                                if (r1 != 0) { byte[] d = b.mem_read(r1, 4); sb.append(" [*r1]=0x" + Long.toHexString(le32val(d))); }
+                            } catch (Throwable t) { sb.append(" (deref fail: " + t + ")"); }
+                            System.out.println(sb);
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x120382a8L, 0x120382a8L, null);
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (++hits > 4) return;
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue() & 0xffffffffL;
+                            long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue() & 0xffffffffL;
+                            long r2 = b.reg_read(ArmConst.UC_ARM_REG_R2).longValue() & 0xffffffffL;
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue() & 0xffffffffL;
+                            System.out.println(">>> [p27e @0x120382bc] r0=0x" + Long.toHexString(r0)
+                                + " r1=0x" + Long.toHexString(r1)
+                                + " r2(blx target)=0x" + Long.toHexString(r2)
+                                + " lr=0x" + Long.toHexString(lr));
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x120382bcL, 0x120382bcL, null);
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (++hits > 4) return;
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue() & 0xffffffffL;
+                            long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue() & 0xffffffffL;
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue() & 0xffffffffL;
+                            System.out.println(">>> [p27e @0x120382d8] r0(blx target)=0x" + Long.toHexString(r0)
+                                + " r1=0x" + Long.toHexString(r1)
+                                + " lr=0x" + Long.toHexString(lr));
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x120382d8L, 0x120382d8L, null);
+                    // p27k: diag at 0x120382d2 (the ldr.w r1,[fp] before the 0x1b8 read) — log fp
+                    // and *fp to see if fp changed from 0x120868e0.
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (++hits > 4) return;
+                            long fp = b.reg_read(ArmConst.UC_ARM_REG_R11).longValue() & 0xffffffffL;
+                            long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue() & 0xffffffffL;
+                            long r6 = b.reg_read(ArmConst.UC_ARM_REG_R6).longValue() & 0xffffffffL;
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue() & 0xffffffffL;
+                            String deref = "?";
+                            try {
+                                if (fp != 0) {
+                                    byte[] d = b.mem_read(fp, 4);
+                                    deref = "0x" + Long.toHexString(le32val(d));
+                                }
+                            } catch (Throwable t) { deref = "ERR"; }
+                            System.out.println(">>> [p27k @0x120382d2] fp=0x" + Long.toHexString(fp)
+                                + " [*fp]=" + deref + " r1=0x" + Long.toHexString(r1)
+                                + " r6=0x" + Long.toHexString(r6) + " lr=0x" + Long.toHexString(lr));
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x120382d2L, 0x120382d2L, null);
+                    // p27l: HARD FIX at 0x120382dc (blx r0) — force r0=VTABLE_STUB2 regardless of
+                    // what *(P2+0x1b8) holds at execution time.
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (++hits > 8) return;
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue() & 0xffffffffL;
+                            if (r0 != (VTABLE_STUB2 | 1L)) {
+                                b.reg_write(ArmConst.UC_ARM_REG_R0, VTABLE_STUB2 | 1L);
+                                System.out.println(">>> [p27l @0x120382dc] r0 was 0x" + Long.toHexString(r0)
+                                    + " -> forced VTABLE_STUB2 (hit #" + hits + ")");
+                            }
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x120382dcL, 0x120382dcL, null);
+                    System.out.println(">>> [p27l] hard r0 fix at 0x120382dc installed");
+                    // p27o: the 0x1203a8ac function reads *(*(P2+0x38)+0x1c) as a function pointer.
+                    // Our P2+0x38 = VTABLE_STUB (code addr) makes +0x1c read zeros -> blx 0 crash.
+                    // Fix: create a small DATA struct at SCRATCH+0x900 whose +0x1c field holds
+                    // VTABLE_STUB2, and point P2+0x38 at it. Fill ALL offsets with STUB2 pointers
+                    // so any sub-offset read (packer reads +0x1c AND +0x38 from it) returns a
+                    // valid function pointer.
+                    // p27x: THIS EXPERIMENT IS DISABLED — it replaced the crash with a worse one
+                    // (blx to our data struct as ARM code -> garbage SVC). The packer's chain
+                    // r0=[*sl]; r1=[r0+0x24]; r4=[r1+0x38] walks REAL C++-style objects, and any
+                    // fake pointer we inject breaks the next read. Keep P2+0x38 at its original
+                    // VTABLE_STUB value and accept the crash for now.
+                    final long P2_38_STRUCT = SCRATCH + 0x900;
+                    try {
+                        backend.mem_write(0x120868f0L + 0x38, le32(VTABLE_STUB | 1L));
+                        System.out.println(">>> [p27x] P2+0x38 kept at VTABLE_STUB (p27o disabled)");
+                    } catch (Throwable t) {
+                        System.out.println(">>> [p27x] P2+0x38 reset FAILED: " + t);
+                    }
+                    System.out.println(">>> [p27e] phase-2 dispatch diagnostics installed");
+                } catch (Throwable t) {
+                    System.out.println(">>> [p27e] diag install FAILED: " + t);
+                }
+                // p27m: hooks at 0x120382de (bl 0x120372e4) and 0x1203a8ac entry — the calls right
+                // after the phase-2 dispatches. The nested Function32 crash may be inside these.
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (++hits > 4) return;
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue() & 0xffffffffL;
+                            long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue() & 0xffffffffL;
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue() & 0xffffffffL;
+                            System.out.println(">>> [p27m @0x120382de bl 0x120372e4] r0=0x" + Long.toHexString(r0)
+                                + " r1=0x" + Long.toHexString(r1) + " lr=0x" + Long.toHexString(lr));
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x120382deL, 0x120382deL, null);
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (++hits > 4) return;
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue() & 0xffffffffL;
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue() & 0xffffffffL;
+                            System.out.println(">>> [p27m @0x1203a8ac entry] r0=0x" + Long.toHexString(r0)
+                                + " lr=0x" + Long.toHexString(lr));
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x1203a8acL, 0x1203a8acL, null);
+                    // p27n: dump the dispatch chain at 0x1203a8fe (ldr r0,[r1,#0x38]; ldr r0,[r0,#0x1c]; blx r0)
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (++hits > 4) return;
+                            long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue() & 0xffffffffL;
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue() & 0xffffffffL;
+                            long sl = b.reg_read(ArmConst.UC_ARM_REG_R9).longValue() & 0xffffffffL;
+                            StringBuilder sb = new StringBuilder(">>> [p27n @0x1203a8fe] sl=0x" + Long.toHexString(sl)
+                                + " r1=0x" + Long.toHexString(r1) + " r0=0x" + Long.toHexString(r0));
+                            try {
+                                if (r1 != 0) {
+                                    byte[] d = b.mem_read(r1, 4); sb.append(" [*r1]=0x" + Long.toHexString(le32val(d)));
+                                    d = b.mem_read(r1 + 0x38, 4); long p38 = le32val(d); sb.append(" [r1+0x38]=0x" + Long.toHexString(p38));
+                                    if (p38 != 0) {
+                                        d = b.mem_read(p38 + 0x1c, 4); long p1c = le32val(d); sb.append(" [*(r1+0x38)+0x1c]=0x" + Long.toHexString(p1c));
+                                    }
+                                }
+                            } catch (Throwable t) { sb.append(" (deref fail)"); }
+                            System.out.println(sb);
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x1203a8feL, 0x1203a8feL, null);
+                    // p27p: diag at 0x1203731c (blx r4 in 0x120372e4) — the current crash site chain:
+                    // r0=[*sl]; r1=[r0+0x24]; r4=[r1+0x38]; blx r4
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            if (++hits > 4) return;
+                            long r4 = b.reg_read(ArmConst.UC_ARM_REG_R4).longValue() & 0xffffffffL;
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue() & 0xffffffffL;
+                            long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue() & 0xffffffffL;
+                            long sl = b.reg_read(ArmConst.UC_ARM_REG_R9).longValue() & 0xffffffffL;
+                            StringBuilder sb = new StringBuilder(">>> [p27p @0x1203731c] sl=0x" + Long.toHexString(sl)
+                                + " r4(blx target)=0x" + Long.toHexString(r4)
+                                + " r0=0x" + Long.toHexString(r0)
+                                + " r1=0x" + Long.toHexString(r1));
+                            try {
+                                if (sl != 0) {
+                                    byte[] d = b.mem_read(sl, 4);
+                                    long p = le32val(d);
+                                    sb.append(" [*sl]=0x" + Long.toHexString(p));
+                                    if (p != 0) {
+                                        d = b.mem_read(p + 0x44, 4);
+                                        sb.append(" [*sl+0x44]=0x" + Long.toHexString(le32val(d)));
+                                        d = b.mem_read(p + 0x24, 4);
+                                        long p24 = le32val(d);
+                                        sb.append(" [*sl+0x24]=0x" + Long.toHexString(p24));
+                                        if (p24 != 0) {
+                                            d = b.mem_read(p24 + 0x38, 4);
+                                            sb.append(" [*sl+0x24+0x38]=0x" + Long.toHexString(le32val(d)));
+                                        }
+                                    }
+                                }
+                            } catch (Throwable t) { sb.append(" (deref fail)"); }
+                            System.out.println(sb);
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x1203731cL, 0x1203731cL, null);
+                    System.out.println(">>> [p27m] post-phase-2 call hooks installed");
+                } catch (Throwable t) {
+                    System.out.println(">>> [p27m] hook install FAILED: " + t);
+                }
+                // p27c: POINT THE VTABLE AT A REAL FUNCTION-POINTER PAGE. vtable = *(P2+0x10) = P2
+                // (self-pointer hack from session 15d) makes vtable[0x44] = *(P2+0x44) = a DATA field
+                // (part of the class-name strings) = 0. Instead, set *(P2+0x10) = VTABLE page
+                // (0x7f001000) and populate the slots the packer reads:
+                //   - vtable[0x44] (cE resolver, 0x1203b716) -> VTABLE_STUB2 (writes *r1=1, returns 1)
+                //     so cE returns sp[8]=1 -> cB's cbz unblocks.
+                //   - vtable[0x00] (cB/cC dispatch, 0x1203a78e/0x1203a812) -> VTABLE_STUB (returns 1
+                //     cleanly, no *r1 write needed — cB reads sp[8] after, which already = 1).
+                //   - vtable[0x54, 0x60, 0x64, 0xa4, 0x1b8] (N.l init phase 2, 0x120382ac-0x120382dc)
+                //     -> VTABLE_STUB2 so the second-wave dispatches also return cleanly.
+                try {
+                    byte[] vtPtr = new byte[]{
+                        (byte)(VTABLE & 0xff), (byte)((VTABLE>>8)&0xff),
+                        (byte)((VTABLE>>16)&0xff), (byte)((VTABLE>>24)&0xff)
+                    };
+                    backend.mem_write(0x12086900L, vtPtr); // *(P2+0x10) = 0x7f001000
+                    backend.mem_write(VTABLE + 0x00, le32(VTABLE_STUB | 1L));  // cB/cC dispatch
+                    backend.mem_write(VTABLE + 0x44, le32(VTABLE_STUB2 | 1L)); // cE resolver
+                    // p27g: 0x1203a848 (called at 0x12038298) reads vtable[0x40] — add it.
+                    for (int off : new int[]{0x40, 0x54, 0x60, 0x64, 0xa4, 0x1b8}) {
+                        backend.mem_write(VTABLE + off, le32(VTABLE_STUB2 | 1L));
+                    }
+                    // p27h: N.l reads function pointers DIRECTLY from the P2 data struct at
+                    // 0x120382d8: `ldr.w r0,[r1,#0x1b8]; blx r0` where r1=[fp]=P2. P2+0x1b8 holds
+                    // garbage ASCII (0x41246461 from the class-name strings). Overwrite the
+                    // known read offsets of P2 with STUB2 so those dispatches return cleanly.
+                    // P2+0x1b8 is the one hit; P2+0xa4 and P2+0x60 are the other candidates
+                    // (0x1203826a: ldr r0,[r1,#0xa4]; ldr r0,[r0]; blx r0 — double deref).
+                    for (int off : new int[]{0x1b8, 0x60, 0x54}) {
+                        backend.mem_write(0x120868f0L + off, le32(VTABLE_STUB2 | 1L));
+                        System.out.println(">>> [p27h] P2(0x120868f0)+0x" + Long.toHexString(off) + " -> VTABLE_STUB2");
+                    }
+                    // p27i: WriteHook on P2+0x1b8 — N.l re-writes it during execution (the crash
+                    // still fetches 0x41246460 = the ORIGINAL garbage). Restore STUB2 on any write.
+                    try {
+                        backend.hook_add_new(new WriteHook() {
+                            int hits;
+                            public void hook(Backend b, long address, int size, long value, Object user) {
+                                int n = ++hits;
+                                long pc = 0;
+                                try { pc = b.reg_read(ArmConst.UC_ARM_REG_PC).longValue() & 0xffffffffL; } catch (Throwable t) {}
+                                if (n <= 8)
+                                    System.out.println(">>> [p27i WRITE@P2+0x1b8] #" + n + " value=0x"
+                                        + Long.toHexString(value) + " PC=0x" + Long.toHexString(pc));
+                                try {
+                                    b.mem_write(0x12086aa8L, le32(VTABLE_STUB2 | 1L));
+                                } catch (Throwable t) { /* best effort */ }
+                            }
+                            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                            public void detach() {}
+                        }, 0x12086aa8L, 0x12086aa8L, null);
+                        System.out.println(">>> [p27i] WriteHook on P2+0x1b8 (0x12086aa8) installed — restores STUB2");
+                    } catch (Throwable t) {
+                        System.out.println(">>> [p27i] WriteHook install FAILED: " + t);
+                    }
+                    System.out.println(">>> [p27d] vtable 0x7f001000: [0x00]->STUB, [0x40,0x44,0x54,0x60,0x64,0xa4,0x1b8]->STUB2");
+                } catch (Throwable t) {
+                    System.out.println(">>> [p27d] vtable redirect FAILED: " + t);
+                }
+
                 // ===== Session 23 part 22: hook 0x1203b72a — the REAL fatal `blx r5`, inside cE
-                // (0x1203b6f8, called from cB at 0x1203a77c). r5 = global->vtable[0x44]. This blx
-                // re-enters 0x120381c0 (N.l) as a nested Function32 call and faults FETCH_PROT.
                 // (Part 22 first tried cB's 0x1203a7a4 blx, but that path is conditional and never
                 //  executes — cE's 0x1203b72a is the true dispatch.)
                 // (a) Log r5: r5 == 0x120381c1 confirms the vtable slot points back into N.l.
@@ -2055,28 +2582,240 @@ public class Unpack extends AbstractJni {
                             long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue() & 0xffffffffL;
                             blxR5Target[0] = r5;
                             boolean reentry = ((r5 & ~1L) == 0x120381c0L);
-                            if (n <= 4)
-                                System.out.println(">>> [p22 blx-r5@0x1203b72a] hit #" + n
+                            // DIAG part 23a: dump r1 (&result out-param) and r2 (name string ptr)
+                            long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue() & 0xffffffffL;
+                            long r2 = b.reg_read(ArmConst.UC_ARM_REG_R2).longValue() & 0xffffffffL;
+                            if (n <= 8) {
+                                System.out.println(">>> [p23 blx-r5@0x1203b72a] hit #" + n
                                     + " r5(target)=0x" + Long.toHexString(r5)
                                     + " r0=0x" + Long.toHexString(r0)
+                                    + " r1=0x" + Long.toHexString(r1)
+                                    + " r2=0x" + Long.toHexString(r2)
                                     + " lr=0x" + Long.toHexString(lr)
                                     + (reentry ? "  *** r5 RE-ENTERS 0x120381c0 (N.l) ***" : ""));
-                            // FIX TEST: vtable[0x44] is 0 (our zero-fill left it empty; the packer would
-                            // register a real callback there). blx 0 is the actual fault, mislabeled by
-                            // unidbg as the enclosing N.l Function32@0x120381c1. Force r5 to the harness's
-                            // BX-LR stub (movs r0,#1; bx lr) so the dispatch returns cleanly and cE/N.l
-                            // continue. If N.l progresses past 0x120381c1, the null-dispatch is confirmed.
+                                // Dump the full vtable pointer chain: 0x12082340 -> P1 -> P2 -> vtable -> [0x44]
+                                try {
+                                    long p = 0x12082340L;
+                                    long v1 = 0, v2 = 0, vt = 0, slot = 0;
+                                    byte[] b4;
+                                    b4 = b.mem_read(p, 4); v1 = le32val(b4);
+                                    b4 = b.mem_read(v1, 4); v2 = le32val(b4);
+                                    b4 = b.mem_read(v2 + 0x10, 4); vt = le32val(b4);
+                                    b4 = b.mem_read(vt + 0x44, 4); slot = le32val(b4);
+                                    System.out.println(">>> [p25 CHAIN] *0x12082340=0x"+Long.toHexString(v1)
+                                        + " *P1=0x"+Long.toHexString(v2)
+                                        + " *(P2+0x10)=0x"+Long.toHexString(vt)
+                                        + " vtable[0x44]=0x"+Long.toHexString(slot));
+                                } catch (Throwable t) {
+                                    System.out.println(">>> [p25 CHAIN] dump failed: " + t);
+                                }
+                                // Dump the 80 bytes at r2 — the name string the callback should resolve
+                                try {
+                                    byte[] nameBytes = b.mem_read(r2, 80);
+                                    StringBuilder hex = new StringBuilder();
+                                    StringBuilder ascii = new StringBuilder();
+                                    for (byte x : nameBytes) {
+                                        hex.append(String.format("%02x", x & 0xff));
+                                        ascii.append((x >= 0x20 && x < 0x7f) ? (char)(x & 0xff) : '.');
+                                    }
+                                    System.out.println(">>> [p23 DIAG name@r2] hex=" + hex);
+                                    System.out.println(">>> [p23 DIAG name@r2] ascii=" + ascii);
+                                } catch (Throwable t) {
+                                    System.out.println(">>> [p23 DIAG name@r2] read failed: " + t);
+                                }
+                            }
+                            // FIX (part 23): vtable[0x44] is 0 (our zero-fill left it empty; the packer
+                            // would register a real JNI-resolver callback there on real Android). The real
+                            // callback reads r0=JNIEnv, r1=&result_slot, r2=name string of form
+                            // "<class>\0<sig>\0" (e.g. "android/content/ContextWrapper\0()Landroid/...;\0"),
+                            // performs FindClass+GetMethodID+Call*Method via JNI, and writes the jobject
+                            // handle to *r1. Our VTABLE_STUB only does `movs r0,#1; bx lr` — never writes
+                            // *r1 — so cE returns sp[8]=0, cB's cbz skips the real dispatch, N.l=false.
+                            //
+                            // IMPORTANT (session 24 finding): writing a mock jobject here makes the crash
+                            // WORSE (cB's vtable[0] blx then fires onto a null slot, stub returns, cB pops
+                            // a garbage saved-LR=0x6ad82709, runaway scan, nested Function32 FETCH_PROT).
+                            // The STABLE baseline is the PURE STUB (no handle write): N.l returns false
+                            // cleanly, no crash. The mock-write path is kept but DISABLED — flip
+                            // MOCK_HANDLE_WRITE to true to reproduce the p23d crash for diagnostics.
+                            final boolean MOCK_HANDLE_WRITE = false;
                             if (r5 == 0) {
-                                b.reg_write(ArmConst.UC_ARM_REG_R5, VTABLE_STUB | 1L);
-                                if (n <= 4)
-                                    System.out.println(">>> [p22 FIX] r5 was 0 (empty vtable[0x44]); forced to VTABLE_STUB 0x"
-                                        + Long.toHexString(VTABLE_STUB | 1L));
+                                try {
+                                    byte[] nameBytes = b.mem_read(r2, 80);
+                                    String ascii = new String(nameBytes, "ASCII");
+                                    String printable = ascii.replace('\0', '|').replaceAll("[^\\x20-\\x7e]", ".");
+                                    int trimLen = Math.min(printable.length(), 64);
+                                    if (MOCK_HANDLE_WRITE) {
+                                        // Choose the mock object by matching the class name in the buffer.
+                                        // First call: "android/content/ContextWrapper\0\0()Landroid/content/pm/ApplicationInfo;"
+                                        // → cB passes this same buffer to cC, so cC sees it too.
+                                        DvmObject<?> mockObj;
+                                        if (ascii.contains("ApplicationInfo")) {
+                                            mockObj = getMockApplicationInfo((BaseVM) vm);
+                                        } else {
+                                            // Generic fallback: still use a mock object so the gate opens.
+                                            // Future: dispatch on the class name in the buffer.
+                                            mockObj = getMockApplicationInfo((BaseVM) vm);
+                                        }
+                                        int handle = vm.addGlobalObject(mockObj);
+                                        // Write the handle to *r1 (the out-result slot, = sp+8 in cE)
+                                        // BEFORE the blx r5 fires. Then let r5=VTABLE_STUB run as usual
+                                        // (movs r0,#1; bx lr — returns cleanly). cE's `ldr r0,[sp,#8]`
+                                        // then reads our handle instead of the stub's untouched sp[8].
+                                        b.mem_write(r1, le32(handle & 0xFFFFFFFFL));
+                                        b.reg_write(ArmConst.UC_ARM_REG_R5, VTABLE_STUB | 1L);
+                                        if (n <= 8)
+                                            System.out.println(">>> [p23 FIX] r5 was 0; wrote mock handle=0x"
+                                                + Long.toHexString(handle & 0xFFFFFFFFL) + " to *r1=0x"
+                                                + Long.toHexString(r1) + " name='" + printable.substring(0, trimLen) + "'");
+                                    } else {
+                                        // STABLE BASELINE: pure stub, no handle write. N.l=false, no crash.
+                                        b.reg_write(ArmConst.UC_ARM_REG_R5, VTABLE_STUB | 1L);
+                                        if (n <= 8)
+                                            System.out.println(">>> [p22 FIX] r5 was 0 (empty vtable[0x44]); forced to VTABLE_STUB 0x"
+                                                + Long.toHexString(VTABLE_STUB | 1L) + " name='" + printable.substring(0, trimLen) + "'");
+                                    }
+                                } catch (Throwable t) {
+                                    System.out.println(">>> [p23 FIX] intercept FAILED, fallback to VTABLE_STUB: " + t);
+                                    b.reg_write(ArmConst.UC_ARM_REG_R5, VTABLE_STUB | 1L);
+                                }
                             }
                         }
                         public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
                         public void detach() {}
                     }, 0x1203b72aL, 0x1203b72aL, null);
-                    System.out.println(">>> [p22] blx-r5 hook installed @0x1203b72a (logs r5 + re-asserts RWX)");
+                    System.out.println(">>> [p23] blx-r5 hook installed @0x1203b72a (logs r5 + dumps r2 name)");
+                }
+                // Post-callback hook at 0x1203b72c — the instruction right AFTER `blx r5` returns.
+                // cE does `ldr r0, [sp, #8]` here, so r0 = the value the callback wrote to *r1 (sp+8).
+                // This tells us whether our stub actually populated the result slot.
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            int n = ++hits;
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue() & 0xffffffffL;
+                            if (n <= 8)
+                                System.out.println(">>> [p23 post-callback@0x1203b72c] hit #" + n
+                                    + " r0(sp[8]=result of callback)=0x" + Long.toHexString(r0));
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x1203b72cL, 0x1203b72cL, null);
+                    System.out.println(">>> [p23] post-callback hook installed @0x1203b72c (logs sp[8] result)");
+                } catch (Throwable t) {
+                    System.out.println(">>> [p23] post-callback hook FAILED: " + t);
+                }
+                // Hook cB's own blx r5 dispatch at 0x1203a7a4 — this is the "real work" call after
+                // cE returns non-zero. r5 is loaded from vtable[0] (a global struct, also null in
+                // our harness). Log r5 and the caller's expected return path.
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            int n = ++hits;
+                            long r5 = b.reg_read(ArmConst.UC_ARM_REG_R5).longValue() & 0xffffffffL;
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue() & 0xffffffffL;
+                            long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue() & 0xffffffffL;
+                            long r2 = b.reg_read(ArmConst.UC_ARM_REG_R2).longValue() & 0xffffffffL;
+                            long r3 = b.reg_read(ArmConst.UC_ARM_REG_R3).longValue() & 0xffffffffL;
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue() & 0xffffffffL;
+                            if (n <= 8)
+                                System.out.println(">>> [p23 cB-blx@0x1203a7a4] hit #" + n
+                                    + " r5(vtable[0])=0x" + Long.toHexString(r5)
+                                    + " r0=0x" + Long.toHexString(r0)
+                                    + " r1=0x" + Long.toHexString(r1)
+                                    + " r2=0x" + Long.toHexString(r2)
+                                    + " r3=0x" + Long.toHexString(r3)
+                                    + " lr=0x" + Long.toHexString(lr));
+                            // If r5 is 0 or points to our BX-LR stub, skip the dispatch:
+                            // set r5 to BX-LR stub so the call returns immediately,
+                            // and write 1 to *r1 (the out-result slot) to signal success.
+                            if (r5 == 0 || (r5 & ~1L) == (VTABLE_STUB & ~1L)) {
+                                b.reg_write(ArmConst.UC_ARM_REG_R5, VTABLE_STUB | 1L);
+                                // Write 1 to the out-param (the bool result slot at *r1)
+                                try {
+                                    b.mem_write(r1, le32(1L));
+                                    if (n <= 8)
+                                        System.out.println(">>> [p23 cB-blx FIX] r5 was 0/stub; forced to VTABLE_STUB, wrote 1 to *r1=0x"
+                                            + Long.toHexString(r1));
+                                } catch (Throwable t) {
+                                    if (n <= 8)
+                                        System.out.println(">>> [p23 cB-blx FIX] mem_write failed: " + t);
+                                }
+                            }
+                            // Re-assert RWX on the N.l entry page before any nested Function32
+                            // re-entry can fault (parts 20-22 root cause).
+                            try {
+                                b.mem_protect(0x12038000L, 0x2000,
+                                    UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                            } catch (Throwable t) { /* best effort */ }
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x1203a7a4L, 0x1203a7a4L, null);
+                    System.out.println(">>> [p23] cB-blx hook installed @0x1203a7a4");
+                } catch (Throwable t) {
+                    System.out.println(">>> [p23] cB-blx hook FAILED: " + t);
+                }
+                // Hook cC's blx r5 dispatch at 0x1203a818 — same pattern as cB's, from the
+                // near-identical template at 0x1203a7d4. Also intercept when r5 is null/stub.
+                try {
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            int n = ++hits;
+                            long r5 = b.reg_read(ArmConst.UC_ARM_REG_R5).longValue() & 0xffffffffL;
+                            long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue() & 0xffffffffL;
+                            if (n <= 8)
+                                System.out.println(">>> [p23 cC-blx@0x1203a818] hit #" + n
+                                    + " r5=0x" + Long.toHexString(r5)
+                                    + " r1=0x" + Long.toHexString(r1));
+                            if (r5 == 0 || (r5 & ~1L) == (VTABLE_STUB & ~1L)) {
+                                b.reg_write(ArmConst.UC_ARM_REG_R5, VTABLE_STUB | 1L);
+                                try {
+                                    b.mem_write(r1, le32(1L));
+                                    if (n <= 8)
+                                        System.out.println(">>> [p23 cC-blx FIX] forced stub, wrote 1 to *r1=0x"
+                                            + Long.toHexString(r1));
+                                } catch (Throwable t) {
+                                    if (n <= 8) System.out.println(">>> [p23 cC-blx FIX] mem_write failed: " + t);
+                                }
+                            }
+                            // DIAG: dump cC's stack so we can see what popeq will restore as the return PC.
+                            // cC pushes {r4,r5,r6,r7,lr} (5 regs = 20 bytes) then str fp,[sp,#-4] (4 bytes),
+                            // then sub sp,#0x10 (16 bytes). At this point sp+0x18 = saved lr.
+                            if (n <= 2) {
+                                long sp = b.reg_read(ArmConst.UC_ARM_REG_SP).longValue() & 0xffffffffL;
+                                long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue() & 0xffffffffL;
+                                System.out.println(">>> [p23 cC-blx DIAG] sp=0x" + Long.toHexString(sp)
+                                    + " lr=0x" + Long.toHexString(lr));
+                                try {
+                                    // Dump 0x40 bytes from sp to see the full frame including saved lr
+                                    byte[] stk = b.mem_read(sp, 0x40);
+                                    StringBuilder sbh = new StringBuilder();
+                                    for (byte x : stk) sbh.append(String.format("%02x", x & 0xff));
+                                    System.out.println(">>> [p23 cC-blx DIAG] stack@sp=" + sbh);
+                                    // Decode the saved lr at sp+0x18 (5th word: r4,r5,r6,r7,lr)
+                                    long savedLr = (stk[0x18] & 0xff) | ((stk[0x19] & 0xff) << 8)
+                                        | ((stk[0x1a] & 0xff) << 16) | ((stk[0x1b] & 0xff) << 24);
+                                    System.out.println(">>> [p23 cC-blx DIAG] saved lr at sp+0x18 = 0x" + Long.toHexString(savedLr));
+                                } catch (Throwable t) {
+                                    System.out.println(">>> [p23 cC-blx DIAG] stack read failed: " + t);
+                                }
+                            }
+                            // Re-assert RWX on the N.l entry page (same as cB-blx).
+                            try {
+                                b.mem_protect(0x12038000L, 0x2000,
+                                    UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                            } catch (Throwable t) { /* best effort */ }
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x1203a818L, 0x1203a818L, null);
+                    System.out.println(">>> [p23] cC-blx hook installed @0x1203a818");
+                } catch (Throwable t) {
+                    System.out.println(">>> [p23] cC-blx hook FAILED: " + t);
                 }
                 // Pre-map a large low-memory range for the libexec memory scan loop (libexec 0x3b72d)
                 // and the N.l decrypted-code output region (~0x11000000-0x12000000). The scan walks
@@ -2816,6 +3555,14 @@ public class Unpack extends AbstractJni {
                     }
                 }
 
+                // p27j: verify P2+0x1b8 right before N.l
+                try {
+                    byte[] bs = backend.mem_read(0x12086aa8L, 4);
+                    System.out.println(">>> [p27j PRE-N.l] *(P2+0x1b8)=0x" + Long.toHexString(le32val(bs)));
+                } catch (Throwable t) {
+                    System.out.println(">>> [p27j] read failed: " + t);
+                }
+
                 int jniTotalBeforeNl = 0;
                 if (INSTALL_JNI_HOOKS_PRELOAD) {
                     System.out.println(">>> [p18 PRE-N.l] JNI totals:");
@@ -2835,6 +3582,19 @@ public class Unpack extends AbstractJni {
 
                 System.out.println(">>> calling N.l(Application, path) ...");
                 System.out.println(">>> SINGLETON2 dispatch count before N.l: " + singleton2Hits[0]);
+                // p26: dump the chain state RIGHT before N.l
+                try {
+                    byte[] b4 = backend.mem_read(0x12082340L, 4); long v1 = le32val(b4);
+                    b4 = backend.mem_read(v1, 4); long v2 = le32val(b4);
+                    b4 = backend.mem_read(v2 + 0x10, 4); long vt = le32val(b4);
+                    b4 = backend.mem_read(vt + 0x44, 4); long slot = le32val(b4);
+                    System.out.println(">>> [p26 PRE-N.l CHAIN] *0x12082340=0x"+Long.toHexString(v1)
+                        + " *P1=0x"+Long.toHexString(v2)
+                        + " *(P2+0x10)=0x"+Long.toHexString(vt)
+                        + " vtable[0x44]=0x"+Long.toHexString(slot));
+                } catch (Throwable t) {
+                    System.out.println(">>> [p26 PRE-N.l CHAIN] dump failed: " + t);
+                }
                 boolean nOk = false;
                 // Disable walk trace hooks during N.l to avoid Unicorn internal corruption
                 // from too many CodeHook callbacks during deep recursive decryption.
@@ -2912,6 +3672,16 @@ public class Unpack extends AbstractJni {
                 }
 
                 // Post-N.l: dump candidate landing zones and scan for non-zero pages
+                // Also dump the b2b/al stub region to see if N.l patched the stubs.
+                try {
+                    byte[] stubs = backend.mem_read(0x12039458L, 16);
+                    StringBuilder sbh = new StringBuilder();
+                    for (byte x : stubs) sbh.append(String.format("%02x", x & 0xff));
+                    System.out.println(">>> post-N.l STUBS@0x12039458: " + sbh
+                        + " (if N.l patched: should differ from '0020704770477047')");
+                } catch (Throwable t) {
+                    System.out.println(">>> post-N.l STUBS dump failed: " + t);
+                }
                 for (long probe : new long[]{0x100b2000L, 0x110b2000L, 0x200b2000L, 0x20101000L,
                         0x11fb8000L, 0x11f01000L, 0x11ffe000L}) {
                     try {
