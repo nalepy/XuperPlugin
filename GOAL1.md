@@ -24,6 +24,9 @@ path is now:
 1. Decompile the **committed** carved DEX — it's persisted at `_session/xtv_dex/app_classes_fixed.dex`
    (+ `d2_classes.dex`): `jadx -d out _session/xtv_dex/app_classes_fixed.dex`. (Re-carve from `.4` only
    if you need a fresher build; steps in `_session/xtv_dex/README.md`.)
+   **Already done (session 30):** the jadx output exists locally at `_scratch/jadx_xtv_main/`
+   (~5.5k classes, main dex) and `_scratch/jadx_xtv_d2/` (~5.7k classes, multidex). Grep targets:
+   `portal200001`, `forceUpdate`, `isVip`, `isPay`, `bindEmail`, `CheckForceBind`, `updateOrInsert`.
 2. Search the decompiled source for the **email-registration / forced-update / payment-VIP gate checks**
    and map the minimal patches (force the unlocked branch). Targets listed in `GOAL0.md` "Goal 1 targets".
 3. Then tackle the REAL remaining wall for Goal 1: **re-locking** — repack under ijiami (resists it) or
@@ -32,6 +35,14 @@ path is now:
 
 The emulation sections below are retained as reference / fallback (and the session-28 struct-walk fix is
 still valid progress), but **do not spend tokens driving `N.l→true` just to get the DEX — you already have it.**
+
+## Session 30 note — relevance of the connection-level portalCore gate to Goal 1
+Goal 2's work (session 30) proved the portalCore version-gate is a **connection-level client-identity
+check**: the server accepts only the app's Titan-Ranger native TLS stack (0xcca9-in-TLS1.2 negotiation)
+and returns `portal200001` to every other client before parsing anything. For Goal 1 this means:
+patching the DEX's *client-side* gate checks (email-reg / forced-update / VIP) is still the right task —
+the app itself passes the server gate natively, so an unlocked app build does NOT need to defeat it.
+The gate only matters for Goal 2 (replicating the API from our own app).
 
 ## Current state
 - XTV is **ijiami-packed**: the real Java/Kotlin code (`classes.dex`) is encrypted inside

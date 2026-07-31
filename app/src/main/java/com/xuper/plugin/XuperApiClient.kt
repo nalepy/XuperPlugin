@@ -546,8 +546,15 @@ class XuperApiClient(context: Context) {
     }
 
     /**
-     * Common portalCore request envelope — the exact device-field set captured from the
-     * live getAuthInfo request (heap_live.bin). `extra` merges call-specific fields on top.
+     * Common portalCore request envelope — corrected against the APP'S OWN REQUEST LOG
+     * (heap `service_name:"portal"` record, session 30): the real app's getLiveData body
+     * uses `b29` LOWERCASE, includes `contentType` inside the body, and does NOT carry
+     * `lang`/`type` in the common fields (those are GetAuthInfoBean per-call fields).
+     * Session-28's DEX reading (`B29` uppercase, no contentType) was WRONG — the app's
+     * own log is the ground truth. NOTE: matching the body exactly still does NOT clear
+     * portal200001 (proven session 30 with the app's byte-exact request) — the gate is
+     * the connection/client identity (see GOAL2.md); these fields are kept because they
+     * are the verified-correct request shape.
      */
     private fun envelope(extra: JsonObjectBuilder.() -> Unit = {}): String {
         val c = config
@@ -555,14 +562,8 @@ class XuperApiClient(context: Context) {
             put("apkVersion", c.apkVersion)
             put("appId", c.appId)
             put("appLanguage", c.appLanguage)
-            // WIRE-EXACT (DEX dump .4, interceptor ld.b.a()): the real app's request
-            // interceptor emits the key "B29" (uppercase) and does NOT put contentType in
-            // the body (contentType is a header, added by interceptor ld.a). This makes our
-            // body field-set byte-identical to the real app's. NOTE: live replay proved this
-            // alone does NOT clear portal200001 — see GOAL2.md session 28: the version-gate
-            // is enforced above the request body (TLS/client-identity + runtime host pool),
-            // not by these fields. Kept because it is verified-correct and needed downstream.
-            put("B29", c.b29)
+            put("b29", c.b29)
+            put("contentType", "application/json;charset=utf-8")
             put("cpu", c.cpu)
             put("deviceToken", "")
             put("hardwareInfo", c.hardwareInfo)
@@ -574,8 +575,6 @@ class XuperApiClient(context: Context) {
             put("sdkVer", c.sdkVer)
             put("sn", c.sn)
             put("sysVersion", c.sysVersion)
-            put("lang", c.appLanguage)
-            put("type", "1")
             put("userId", c.userId)
             put("userToken", c.userToken)
             extra()
@@ -657,7 +656,13 @@ class XuperApiClient(context: Context) {
      */
     fun getAuthInfo(): Result<String> {
         val c = config
-        val (code, resp) = postJson(portalHost(), "/api/portalCore/v9/getAuthInfo", envelope())
+        // GetAuthInfoBean per-call fields: lang, type (portalCode/userId/userToken already
+        // in the common envelope).
+        val body = envelope {
+            put("lang", c.appLanguage)
+            put("type", "1")
+        }
+        val (code, resp) = postJson(portalHost(), "/api/portalCore/v9/getAuthInfo", body)
         if (code <= 0) return Result.failure(IOException("network: $resp"))
         if (resp.isNullOrBlank()) return Result.failure(IOException("HTTP $code empty (encrypt/path?)"))
         return try {

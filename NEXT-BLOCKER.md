@@ -1,4 +1,9 @@
-# Next Blocker — *** SOLVED (part 22): the "EXEC loss" was a `blx` through a NULL vtable slot (0x44). N.l now RUNS end-to-end (returns false). New frontier: get N.l to return true. ***
+# Next Blocker — *** SUPERSEDED as the primary blocker (session 28+): the decrypted DEX was carved from
+# .4 live memory (GOAL0.md). This file is now the FALLBACK-ONLY emulation tracker for driving
+# N.l→true via unidbg; the live blockers live in GOAL2.md (portalCore connection-gate, session 30)
+# and GOAL1.md (gate-check patching + re-lock). Keep here only if resuming the emulation route. ***
+
+# (historical header) *** SOLVED (part 22): the "EXEC loss" was a `blx` through a NULL vtable slot (0x44). N.l now RUNS end-to-end (returns false). New frontier: get N.l to return true. ***
 
 ## Update (session 23 part 22) — BREAKTHROUGH: not an EXEC-loss at all, a null-pointer `blx`. N.l executes for the first time.
 

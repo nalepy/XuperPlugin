@@ -75,19 +75,24 @@ Decompile first: `jadx -d out app_decrypted.dex` (or `baksmali d` for smali). Th
 ### Goal 2 targets — DONE (session 28): pipeline found, blocker MOVED (see `GOAL2.md`)
 The DEX revealed the whole portalCore request pipeline from the app's own code:
 - Retrofit `jd.a`; interceptor `ld.a` adds 4 headers (`apk`=appId, `apkVer`, `spkgVer`, `Content-Type`)
-  with **NO signature/nonce/timestamp**; interceptor `ld.b` merges 15 body fields (incl. `B29`
-  uppercase) then 3DES-encrypts. Ground-truthed `appId="com.android.msandroid"`, `apkVer=43405`.
-- Two wire diffs patched in `XuperApiClient.envelope()` (`b29`→`B29`, dropped stray `contentType`
-  body field) → our body is now byte-identical to the real app's.
-- **CRITICAL — `portal200001` is NOT a body-field diff (proven).** A wire-exact replay to the live
-  hosts still returned `portal200001` / "版本已停止使用" (version discontinued). So the gate is enforced
-  **above the request body:** most likely (a) the app's pinned client-TLS identity (`rd.h`
-  sslSocketFactory — a plain TLS fingerprint gets a canned version-reject), and/or (b) the CURRENT
-  portal host pool is DES-decrypted at runtime from `b3.a` DomainInfo, and the plugin's hardcoded
-  `PORTAL_BOOTSTRAP_HOSTS` are **legacy** endpoints that always answer `portal200001`.
-- **Goal 2's next blocker** (in `GOAL2.md`): recover the current host pool (read `b3.a` resolved domains
-  from live memory / the `_session/heap_domain.txt` + `heap_portal.txt` dumps, or decrypt its DES
-  config) and/or match the app's TLS client identity. 3DES body crypto is already correct.
+  with **NO signature/nonce/timestamp**; interceptor `ld.b` merges the device fields then 3DES-encrypts.
+  Ground-truthed `appId="com.android.msandroid"`, `apkVer=43405`.
+- **CORRECTION (session 30):** the session-28 DEX reading of the *body* was WRONG. The app's own
+  request log (heap `service_name:"portal"` DoHttpSec record) shows the real body uses **`b29`
+  lowercase**, **`contentType` INSIDE the body**, and **no `lang`/`type`** in the common fields.
+  The plugin envelope was corrected accordingly (`XuperApiClient.kt`, session 30).
+- **`portal200001` is a CONNECTION-LEVEL client-identity gate (proven session 30):** it fires for any
+  non-app client BEFORE the body is parsed (garbage body → same response). The app's requests go
+  through the **Titan Ranger native layer** (`DoHttpSec`) whose bundled TLS stack negotiates
+  `TLS_AES_128_GCM_SHA256` (0xcca9 — a TLS 1.3 cipher) inside a TLS 1.2 handshake; standard clients
+  negotiate 0xc02b. A Go `utls` probe (`_scratch/utlsclient/`) now replicates that negotiation but the
+  residual diff is inside the Ranger native HTTP/2 layer. Full detail: `GOAL2.md` Session 30.
+
+### Goal 1 targets — still pending (decompiled sources now local)
+- The gate-check search (email-reg / forced-update / VIP-payment) is NOT done yet. The decompiled
+  sources were regenerated locally (session 30): `_scratch/jadx_xtv_main/` (main DEX) and
+  `_scratch/jadx_xtv_d2/` (multidex) — grep targets for `portal200001`, `forceUpdate`, `isVip`, etc.
+  See `GOAL1.md`.
 
 ## Kill-criterion
 Route 1 (`.4` carve) should take one focused session to know if the DEX is recoverable from memory.

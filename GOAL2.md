@@ -10,21 +10,36 @@ Ship **our own** IPTV app/plugin (XuperPlugin) that uses **XTV's backend** to st
 turning XTV (`com.android.mgstv`) into an open **M3U/HLS source** playable in VLC / TiviMate / Kodi, with
 **no email registration, no VIP paywall, no forced updates**, all from our own APK.
 
-## Honest verdict (read first) — UPDATED session 28
-**Still reachable, ~90% built, but the blocker MOVED.** The decrypted DEX was carved from `.4` (see
-`GOAL0.md`) and the full portalCore request pipeline is now known from the app's own code. Our request
-body is now **byte-identical to the real app's** (fixed `b29`→`B29`, dropped a stray `contentType` field).
-**But `portal200001` is NOT a body diff — proven** by a wire-exact replay that still got rejected
-("版本已停止使用" / version discontinued). So the version-gate is enforced **above the request body**:
-- (a) the app's **pinned client-TLS identity** (`rd.h` sslSocketFactory) — a plain TLS fingerprint gets a
-  canned version-reject, and/or
-- (b) the **current portal host pool** is DES-decrypted at runtime from `b3.a` DomainInfo, so the plugin's
-  hardcoded `PORTAL_BOOTSTRAP_HOSTS` are likely **legacy** endpoints that always answer `portal200001`.
+## Honest verdict (read first) — UPDATED session 30
+**The gate is a CONNECTION-LEVEL client-identity check, precisely characterized but not yet
+replicated end-to-end.** Session 30 proved:
+- `portal200001` is returned to ANY non-app client **before the request body is even parsed**
+  (a garbage body and `{}` get the exact same response; the version message is server-generated).
+- The app's own request log (`service_name:"portal"` DoHttpSec records in the live heap) shows the
+  real body uses **`b29` lowercase + `contentType` inside the body + NO `lang`/`type`** — the
+  session-28 "wire-exact" DEX reading was WRONG (see the Session-30 section). The plugin's envelope
+  was corrected to match.
+- Replaying the app's byte-exact request (body+headers from its own log) still gets `portal200001`
+  — from Win11 AND from the plugin running on `.4` (same Android BoringSSL, same IP, same hosts).
+- The app's TLS is a **bundled minimal TLS 1.2 stack** (Ranger native `DoHttpSec`): a 237-byte
+  ClientHello (no key_share/supported_versions/GREASE), and the server negotiates
+  **`TLS_AES_128_GCM_SHA256` (0xcca9 — a TLS 1.3 cipher) inside a TLS 1.2 handshake** with the app.
+  Standard clients negotiate `0xc02b`. No client cert (server sends no CertificateRequest — mTLS
+  ruled out). No cookies to portal hosts (the WAF 400s any Cookie header).
+- A Go `utls` client that reproduces the app's exact ClientHello **does get the cca9/TLS1.2
+  negotiation** (first external client to do so) — but still receives `portal200001`. The remaining
+  diff is inside the Ranger native HTTP layer (h2 SETTINGS/header framing, or session state).
 
-Remaining work = **(1) recover the current host pool** (read `b3.a` domains from live memory / the
-`_session/heap_domain.txt`+`heap_portal.txt` dumps, or decrypt its DES config) and **(2) match the app's
-TLS client identity.** Harder than "one field," but well-scoped. See the Session-28 section for details.
-Emulation stays the hard fallback (`GOAL1.md`); do NOT start there.
+Remaining work = replicate the Ranger native HTTP layer's h2 behavior (the utls client in
+`_scratch/utlsclient/` is the probe) — OR sidestep portalCore entirely (see "Sidestep path" below).
+Emulation (`GOAL1.md`) stays the hard fallback; do NOT start there.
+
+## Sidestep path (NEW session 30 — practical)
+The plugin does NOT strictly need portalCore to stream: it has the app's live session (d/s/t cookies
++ playlist path + P2P/segment URLs, all captured session 30 from `.4` heap/prefs). The playlist and
+segment tiers are OPEN (no portalCore). A workable v1: read the app's current session from the rooted
+box (shared_prefs / memory, as done session 30) and reuse it — refresh before the ~30 min s/t expiry.
+Not "own everything," but it streams today.
 
 ## How the stream actually works (fully reverse-engineered)
 ```
@@ -128,6 +143,55 @@ portal host pool (read `b3.a` domain fields from live memory, or decrypt its DES
 (2) match the app's TLS client identity. Artifacts on this box: carved dex + full jadx output in the
 scratchpad (`app_classes.dex`, `d2_classes.dex`, `jadx_out/`, `jadx_d2/`); `_scratch` is Goal-1-owned so
 these were NOT committed there.
+
+## Session 30 — the gate is connection-level client identity; everything about it now proven (2026-07-31)
+
+### What was ruled out (all with live replays / captures)
+| Hypothesis | Test | Result |
+|---|---|---|
+| Body diff (b29/B29, contentType, lang/type, dataVersion, expireTimeStr, userToken) | App's own request log extracted from heap (`service_name:"portal"` record) — replayed byte-exact | Still `portal200001` |
+| Host pool | App's own connection pool keys + `portal_main` config (`104.21.89.119`, hosts in our list) + SNI | Same hosts; all `portal200001` |
+| HTTP/2 vs 1.1 | httpx h2/h1.1, curl_cffi (chrome/safari/firefox/edge) | Same |
+| Cookies | Real live d/s/t (extracted from native heap) | WAF 400 (portal hosts take NO cookies) |
+| Exact JA3 | Built the app's exact ClientHello (237 B, TLS 1.2, no key_share) into Go `utls` | Server negotiates **0xcca9** (matches app!) — still `portal200001` |
+| mTLS client cert | Captured the app's real handshake to emowvv — server sends `ServerHello→Cert→SKE→SHD`, **no CertificateRequest**; no private keys in memory | Ruled out |
+| IP/geo | Win11 egress IP == `.4`'s server-visible IP (181.94.226.128) | Same |
+| Gate before body parsing | Garbage body + `{}` → identical `portal200001` | Gate runs pre-body |
+
+### The app's REAL request (from its own heap log — ground truth, supersedes session-28's DEX reading)
+```json
+{"session":"…","service_name":"portal","method":"POST",
+ "url":"/api/portalCore/v6/getLiveData",
+ "headers":"Content-type: application/json;charset=utf-8\r\napkVer: 43405\r\nspkgVer: 2024-11-15 19:08:51_29_14.1_4.9.170\r\napk: com.android.msandroid\r\n",
+ "body":"{\"apkVersion\":\"43405\",\"appId\":\"com.android.msandroid\",\"appLanguage\":\"es\",
+  \"b29\":\"4f6f786b…\",\"contentType\":\"application/json;charset=utf-8\",\"cpu\":\"armeabi-v7a\",
+  \"deviceToken\":\"\",\"hardwareInfo\":\"sun50iw9p1\",\"loginType\":\"2\",\"model\":\"V76PRO\",
+  \"portalCode\":\"masnew\",\"product\":\"walley\",\"reserve1\":\"76356c47…\",\"sdkVer\":29,
+  \"sn\":\"ca0e53edac957b8f6f187528933355f1\",\"sysVersion\":\"2024-11-15 19:08:51_29_14.1_4.9.170\",
+  \"columnId\":76182,\"dataVersion\":\"pre34d022217-8b29-11f1-860c-e7ba14321033LiveDataV6\",
+  \"expireTimeStr\":\"1785953097\",\"pageNum\":1,\"pageSize\":3000,\"userId\":\"169355704\",
+  \"userToken\":\"94f1ace7-bb6b-4a79-ab0e-a2df4d5bcebe\"}",
+ "timeout":60000,"data":"{\"tdc\":false}"}
+```
+**Diffs vs the old plugin envelope (all fixed in `XuperApiClient.envelope()` session 30):** `b29`
+LOWERCASE (plugin sent `B29`), `contentType` IS in the body (plugin dropped it), NO `lang`/`type`
+in the common fields (plugin added them), `expireTimeStr` present, and the app's userToken rotates
+(`94f1ace7-…` vs the plugin's stale `6da3c458-…` — pull fresh from the device prefs).
+
+### The real architecture (why the gate exists)
+The app's portalCore HTTP goes through the **Titan Ranger SDK native layer** (`NativeJni.a("DoHttpSec", …)`
+— the `service_name:"portal"` log IS the DoHttpSec request spec). The native layer (decrypted inside
+ijiami.dat) owns the TLS stack: the 237-byte minimal ClientHello and the HTTP/2 framing. The server
+accepts only that client identity. The Java `qd.b`/Retrofit client is real but the wire goes through
+Ranger.
+
+### The one remaining unknown
+The Go `utls` probe (`_scratch/utlsclient/`) now negotiates the app's exact TLS (0xcca9 in TLS 1.2,
+ALPN h2) yet still gets `portal200001`. The residual diff must be inside the Ranger native HTTP layer:
+h2 SETTINGS frame values/order, h2 header order/framing, or a per-connection native token. Next moves:
+(1) fix the SNI MITM server-side handshake (needs a custom TLS 1.2 server that offers 0xcca9 — OpenSSL
+can't) to capture the app's h2 bytes; (2) or fuzz h2 SETTINGS/headers with the utls probe; (3) or take
+the sidestep path (reuse the live app session from the rooted box).
 
 ## Routes to the wire diff — ranked cheapest first
 1. **Live memory / DEX dump from `.4` (rooted, ADB) — RECOMMENDED, sidesteps the emulation wall.**

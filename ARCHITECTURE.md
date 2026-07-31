@@ -6,16 +6,20 @@ Captured via transparent MITM on TV box `.4` routed through laptop `.40`.
 ## Three-tier stream pipeline
 
 ```
-  ┌─ portalCore API (CERT-PINNED, HTTPS) ──────────────────┐
+  ┌─ portalCore API (HTTPS, Ranger-native TLS) ─────────────┐
   │  Hosts: espjey.ysnihrwtg.com, sxowvd.jzvqwcyor.com,     │
-  │         yrqucu.czxenpyba.com, eskna.ucpjdhivl.com       │
+  │         yrqucu.czxenpyba.com, eskna.ucpjdhivl.com,      │
+  │         ogvkxy.4kcvozfrt.com, eajmnp.hcgv1dt8.com, ...  │
   │  Hands out ONE-TIME (playlist-path, d-cookie) pairs.    │
-  │  Could NOT decrypt — app pins its cert.                 │
+  │  NOT cert-pinned (rd.a.a() trust-all). Server accepts   │
+  │  only the app's Ranger-native TLS: 0xcca9 (TLS 1.3      │
+  │  cipher) inside a TLS 1.2 handshake — everyone else     │
+  │  gets portal200001 (connection-level gate).             │
   └────────────────────────┬───────────────────────────────┘
                            │ each grants one playlist fetch
                            ▼
   ┌─ Playlist (cdsr.higoesutn.com:80, HTTP, Cloudflare) ───┐
-  │  GET /<opaque-path>  Cookie: d=<1100ch>; s=<44>; t=<44> │
+  │  GET /<opaque-path>  Cookie: d=<~200ch>; s=<44>; t=<44> │
   │  → 200 application/vnd.apple.mpegurl (~1080 bytes)      │
   │  ONE-TIME USE: refetch same path+d → 409 Conflict.      │
   │  Lists 6 live segments (~24s window).                   │
@@ -150,22 +154,24 @@ the seed call at channel-open rides 80/443 unpinned. If it too is pinned, the
 seed can only come from in-process observation (frida SSL-unpin / DEX), which is
 blocked on this box (no Magisk → no LSPosed; ijiami anti-frida blocks frida spawn).
 
-## THE REMAINING BLOCKER (updated 2026-07-27)
+## THE REMAINING BLOCKER (updated session 30)
 
 Continuous live playback needs fresh **server-signed** playlist URLs from portalCore
-(`getLiveData` chain — see [NEXT-BLOCKER.md](NEXT-BLOCKER.md)).
+(`getLiveData` chain — see [GOAL2.md](GOAL2.md)).
 
-**Progress:** Kotlin client sends correct 3DES + envelope; Win11 reaches portal hosts.
-**Wire capture** identified **live** hostnames (`sfgknh`, `rokbd`, `vgwbm`) vs **old**
-heap pool (`espjey…` → `portal200001`).
+**What session 30 proved:** the portalCore gate (`portal200001` "版本已停止使用") is a
+**connection-level client-identity check**, not a request/body diff:
+- Returns the same for ANY non-app client, even a garbage body (gate runs before parsing).
+- The app's own requests run through the **Titan Ranger native layer** (`DoHttpSec`) with a bundled
+  minimal TLS 1.2 stack; the server negotiates `0xcca9` (TLS 1.3 cipher) in a TLS 1.2 handshake with
+  the app, `0xc02b` with standard clients.
+- No client cert (server sends no CertificateRequest); no cookies to portal hosts (WAF 400).
+- A Go `utls` probe (`_scratch/utlsclient/`) replicates the 0xcca9/TLS1.2 negotiation; the residual
+  diff is inside the Ranger native HTTP/2 layer (SETTINGS/header framing) or native session state.
+- The app's real request body/headers are now captured (heap `service_name:"portal"` log) — the
+  plugin envelope was corrected to match (`b29` lowercase, `contentType` in body, no `lang`/`type`).
 
-**Still blocked:**
-1. Plugin probes get **403** (live hosts) or **portal200001** / **400** (old pool + stale `s`/`t`).
-2. Fresh **`s`/`t` cookies** not in device prefs — MITM or Set-Cookie capture required.
-3. Kotlin: `getColumnContents`, per-channel `getLiveData`, proxy refresh loop not wired.
-
-Preferred path: refresh cookies → successful `getAuthInfo` → implement list/play in
-`XuperApiClient` (OkHttp has no pinning). Fallback: Frida on **vendor** APK for native headers.
+Full detail: `GOAL2.md` "Session 30" section + `SESSION-2026-07-31.md`.
 
 ## MITM capture method (WORKING — 2026-07-26)
 

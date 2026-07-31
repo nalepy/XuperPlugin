@@ -7,12 +7,14 @@ StreamVault) — no email registration, no VIP paywall, no forced updates.
 It authenticates against XTV's backend using captured session tokens, fetches the
 live playlist, and serves standard HLS locally via a built-in proxy.
 
-## Status — 2026-07-29 (session 14)
+## Status — 2026-07-31 (session 30)
 
-- ✅ Heap scan: CDN vs portal clarified; notice hosts without DES; bootstrap cleaned
-- ✅ Unidbg: real `JNI_OnLoad` @ `0x12043544` reached (Thumb); forced VERSION possible
-- ⛔ **Blocker:** NULL `vtable+0x40` → no `RegisterNatives` → no DES/portal FQDN yet
-- ⛔ Pool hosts still `portal200001` — [NEXT-BLOCKER.md](NEXT-BLOCKER.md), [SESSION-2026-07-29.md](SESSION-2026-07-29.md), [HANDOFF.md](HANDOFF.md)
+- ✅ DEX carved + decompiled (`GOAL0`); portalCore pipeline known; app's real request captured
+- ✅ Plugin envelope corrected to the app's verified body (`b29` lowercase, `contentType` in body)
+- ✅ Gate characterized: `portal200001` is a **connection-level client-identity check** (Ranger-native
+  TLS, 0xcca9-in-TLS1.2) — not a request diff. `utls` probe replicates the TLS; h2 layer is the
+  remaining unknown. See [GOAL2.md](GOAL2.md) Session 30.
+- 📄 Latest session: [SESSION-2026-07-31.md](SESSION-2026-07-31.md)
 
 ## How it works
 
