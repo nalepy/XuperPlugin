@@ -4,7 +4,46 @@ For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md),
 [SESSION-2026-07-29.md](SESSION-2026-07-29.md) first.
 
-## TL;DR (session 19 — 2026-07-29 ~21:35) — READ THIS FIRST
+## TL;DR (session 23 part 18 — 2026-07-31) — READ THIS FIRST
+
+**The blocker is unchanged: `N.l` faults at `0x120381c1` with `UC_ERR_FETCH_PROT` — page `0x12038000`
+loses EXEC mid-execution.** This session eliminated the two remaining strong suspects with hard
+evidence, and named the next one.
+
+- **Part 17 — static-protect region-split RULED OUT.** Gated the lone static `mem_protect(0x12038000,0x2000)`
+  before N.l (`BISECT_NO_STATIC_PROTECT=true`, `Unpack.java:39`). Crash byte-for-byte identical → the
+  protect was a no-op, region-split theory dead.
+- **Part 18 — JNI-env-mprotect RULED OUT, this time validly.** Reinstalled the 8 JNI SVC hooks
+  BEFORE `loadLibrary` (part 14 wrongly installed them after) and range-hooked `base..base+8`
+  (catches FindClass's +4 that part 14 missed). Positive control **PASS** (8 FindClass hits pre-N.l),
+  and **N.l makes ZERO JNI-env calls before the fault**. Hooks proven live → the negative is trustworthy.
+- **JNIEnv = `0xfffe12a0`** (FindClass r0) = the crash's `arg[0]`. N.l is a JNI method that receives
+  JNIEnv, but the fault is a code-fetch on a de-EXEC'd page, not a JNI dispatch.
+
+**NEXT (part 19): the one un-instrumented path — guest `mprotect` LINUX SYSCALL (SVC, r7=125).**
+Linux syscalls bypass the JNIEnv table and hit unidbg's `SyscallHandler`; nothing so far hooks that.
+Full build spec is in NEXT-BLOCKER.md's part-18 section (hook the svc/SyscallHandler, log
+`mprotect`=125 / `mmap2`=192 / `munmap`=91 with addr/len/prot, flag any covering `0x12038000` without
+PROT_EXEC; also check unidbg `AndroidElfLoader` PT_LOAD re-protect; last resort: map `0x12038000` as
+its own standalone page).
+
+### Ops notes for the next agent (verified working this session)
+- **`.40` (unidbg host) SSH now key-based:** `ssh xtv40` (alias in `~/.ssh/config`, key `~/.ssh/id_xtv40`).
+  The old `nestor`/`ian20jesus` password is dead. User `nestor`, host `192.168.100.40`.
+- **`/tmp` is wiped on reboot** — the asset tree `/tmp/apkx/` is gone after any `.40` reboot. Rebuild it:
+  `ssh xtv40 'mkdir -p /tmp/apkx && cd /tmp/apkx && unzip -oq ~/xtv-ghidra/harness/_assets/live_base.apk'`
+  (the 35MB APK survives in `_assets/`; libexec is `assets/ijm_lib/armeabi/libexec.so`).
+- **Build/run loop** (harness = Maven project `~/xtv-ghidra/harness`, class `com.xtv.Unpack`):
+  ```
+  scp _scratch/Unpack.java xtv40:~/xtv-ghidra/harness/src/main/java/com/xtv/Unpack.java
+  ssh xtv40 'export PATH=~/xtv-ghidra/maven/bin:$PATH; cd ~/xtv-ghidra/harness && mvn -q compile \
+    && CP="target/classes:$(cat ~/xtv-ghidra/cp.txt)" \
+    && timeout 60 java -Xmx3g -Djava.library.path=~/xtv-ghidra/nativelib -cp "$CP" com.xtv.Unpack'
+  ```
+- Local working copy of the harness is `_scratch/Unpack.java` (NOT the root `Unpack.java`). Logs pulled to
+  `_scratch/p17_output.log`, `_scratch/p18_output.log`.
+
+## TL;DR (session 19 — 2026-07-29 ~21:35)
 
 **Disassembled `0x12026d74`: it's a `strcspn`-style text tokenizer, and we've been feeding it
 raw binary (the XOR-decrypted entries buffer) instead of a real string — that's the architectural

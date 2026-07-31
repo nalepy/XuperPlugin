@@ -1047,12 +1047,93 @@ public class Unpack extends AbstractJni {
             }, 0x12037c18L, 0x1203a400L, null);
         }
 
+        // ===== Session 23 part 18: JNI SVC hooks installed PRE-loadLibrary =====
+        // Part 14 installed these AFTER loadLibrary, i.e. after JNI_OnLoad/init had already run,
+        // so its "zero hits" was an artifact of late installation (see part-15 audit). Install
+        // BEFORE loadLibrary so the whole run — init phase included — is covered. Range-hook
+        // base..base+8 (FindClass fires at base+4 per Unpack.java:819, a single-addr hook misses it).
+        // Shared counters (jniHits) feed the post-load POSITIVE CONTROL below.
+        final java.util.Map<String,int[]> jniHits = new java.util.concurrent.ConcurrentHashMap<>();
+        final java.util.Map<String,Long> jniStub = new java.util.concurrent.ConcurrentHashMap<>();
+        final boolean INSTALL_JNI_HOOKS_PRELOAD = true;
+        if (INSTALL_JNI_HOOKS_PRELOAD) {
+            try {
+                Pointer envP = vm.getJNIEnv();
+                Pointer funcTableP = envP.getPointer(0);
+                Object[][] jniTargets = new Object[][]{
+                    {"FindClass", 0x18L},
+                    {"GetObjectClass", 0x7cL},
+                    {"IsInstanceOf", 0x80L},
+                    {"GetMethodID", 0x84L},
+                    {"NewObject", 0x70L},
+                    {"CallObjectMethodV", 0x8cL},
+                    {"CallBooleanMethodV", 0x98L},
+                    {"CallVoidMethodV", 0xf8L},
+                };
+                for (Object[] jt : jniTargets) {
+                    final String name = (String) jt[0];
+                    long offset = (Long) jt[1];
+                    Pointer p = funcTableP.getPointer(offset);
+                    if (p == null) { System.out.println(">>> [p18 " + name + "] SVC stub null, skip"); continue; }
+                    final long addr = ((UnidbgPointer) p).toUIntPeer();
+                    jniHits.put(name, new int[1]);
+                    jniStub.put(name, addr);
+                    backend.hook_add_new(new CodeHook() {
+                        public void hook(Backend b, long address, int size, Object user) {
+                            int n = ++jniHits.get(name)[0];
+                            long pc = b.reg_read(ArmConst.UC_ARM_REG_PC).longValue();
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue();
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue();
+                            long r1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue();
+                            long r2 = b.reg_read(ArmConst.UC_ARM_REG_R2).longValue();
+                            // Always surface any JNI call whose return addr is inside N.l's danger
+                            // page (0x12038xxx) — that's the call sequence leading to the crash.
+                            boolean nearCrash = (lr >= 0x12038000L && lr < 0x12039000L);
+                            if (n <= 8 || nearCrash) {
+                                System.out.println(">>> [p18 JNI " + name + "] hit #" + n
+                                    + " pc=0x" + Long.toHexString(pc)
+                                    + " lr=0x" + Long.toHexString(lr)
+                                    + " r0=0x" + Long.toHexString(r0)
+                                    + " r1=0x" + Long.toHexString(r1)
+                                    + " r2=0x" + Long.toHexString(r2)
+                                    + (nearCrash ? "  <<< NEAR 0x12038 CRASH WINDOW" : ""));
+                            }
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, addr, addr + 8, null);   // RANGE base..base+8 (the +4 fix)
+                    System.out.println(">>> [p18] " + name + " range-hook 0x" + Long.toHexString(addr)
+                        + "..0x" + Long.toHexString(addr + 8));
+                }
+            } catch (Throwable t) {
+                System.out.println(">>> [p18] pre-load JNI hook setup FAILED: " + t);
+                t.printStackTrace(System.out);
+            }
+        }
+
         System.out.println(">>> loading libexec.so ...");
         File so = new File("/tmp/apkx/assets/ijm_lib/armeabi/libexec.so");
         DalvikModule dm = null;
         try {
             dm = vm.loadLibrary(so, true);
             System.out.println(">>> loadLibrary returned base=0x"+Long.toHexString(dm.getModule().base));
+
+            // ===== Session 23 part 18: POSITIVE CONTROL =====
+            // JNI_OnLoad just ran, and the init phase is KNOWN to call FindClass (output.log
+            // lines 409-413). If our pre-load FindClass hook shows ZERO hits, the hooks are not
+            // firing at all and every downstream "no JNI" conclusion is worthless — this is the
+            // exact check part 14 skipped. Confirm the hook fires before trusting any result.
+            if (INSTALL_JNI_HOOKS_PRELOAD) {
+                // Empirical (part 18): this packer's JNI_OnLoad does NOT call FindClass — libexec
+                // defers all its FindClass calls to the pre-N.l class-resolution phase (8 calls,
+                // lr in 0x120378xx-0x12037axx). So this init-phase snapshot is EXPECTED to read 0.
+                // The REAL positive control is the pre-N.l tally further below (nonzero there).
+                System.out.println(">>> [p18] JNI hit snapshot at loadLibrary return (init phase, may be 0):");
+                for (java.util.Map.Entry<String,int[]> e : jniHits.entrySet()) {
+                    if (e.getValue()[0] > 0)
+                        System.out.println(">>>   " + e.getKey() + " = " + e.getValue()[0]);
+                }
+            }
             try {
                 com.github.unidbg.Module mod = dm.getModule();
                 com.github.unidbg.Symbol jniSym = mod.findSymbolByName("JNI_OnLoad", false);
@@ -1598,12 +1679,11 @@ public class Unpack extends AbstractJni {
                     t.printStackTrace(System.out);
                 }
 
-                // Session 23 part 14: NewObjectV never fires (part 13). Broaden the same
-                // ground-truth technique to a spread of other JNI env functions (offsets from
-                // unidbg-android 0.9.10-SNAPSHOT DalvikVM.java, same GitHub source) to see the
-                // REAL JNI call sequence leading up to the 0x12038000 EXEC-loss crash, instead
-                // of guessing which single function is responsible.
-                try {
+                // Session 23 part 14 (SUPERSEDED by part 18): this installed the same 8 JNI hooks
+                // but AFTER loadLibrary, so it missed the init phase and mis-reported "zero hits".
+                // Part 18 moved a corrected, positive-controlled version BEFORE loadLibrary. This
+                // block is gated off to avoid double-installing on the same stub addresses.
+                if (!INSTALL_JNI_HOOKS_PRELOAD) try {
                     Pointer env2 = vm.getJNIEnv();
                     Pointer funcTable2 = env2.getPointer(0);
                     Object[][] jniTargets = new Object[][]{
@@ -2578,6 +2658,27 @@ public class Unpack extends AbstractJni {
                     }
                 }
 
+                // ===== Session 23 part 18: REAL positive control + pre-N.l JNI snapshot =====
+                // libexec's pre-N.l class resolution has now run. If ANY JNI hook fired, the
+                // technique is proven live (the check part 14 skipped). Snapshot totals so the
+                // post-N.l delta shows exactly which JNI fns, if any, N.l itself calls.
+                int jniTotalBeforeNl = 0;
+                if (INSTALL_JNI_HOOKS_PRELOAD) {
+                    System.out.println(">>> [p18 PRE-N.l] JNI totals:");
+                    for (java.util.Map.Entry<String,int[]> e : jniHits.entrySet()) {
+                        jniTotalBeforeNl += e.getValue()[0];
+                        if (e.getValue()[0] > 0)
+                            System.out.println(">>>   " + e.getKey() + " = " + e.getValue()[0]);
+                    }
+                    if (jniTotalBeforeNl > 0)
+                        System.out.println(">>> [p18 POSITIVE-CONTROL] PASS — " + jniTotalBeforeNl
+                            + " JNI hook hits so far (incl. FindClass base+4); hooks are LIVE, so"
+                            + " 'no JNI during N.l' below is a TRUSTWORTHY negative.");
+                    else
+                        System.out.println(">>> [p18 POSITIVE-CONTROL] *** FAIL *** — 0 JNI hits before N.l;"
+                            + " hooks not firing, switch to an SVC-number InterruptHook before trusting anything.");
+                }
+
                 System.out.println(">>> calling N.l(Application, path) ...");
                 System.out.println(">>> SINGLETON2 dispatch count before N.l: " + singleton2Hits[0]);
                 boolean nOk = false;
@@ -2596,6 +2697,20 @@ public class Unpack extends AbstractJni {
                 }
                 jniPhase[0] = savedJniPhase;
                 System.out.println(">>> SINGLETON2 dispatch count after N.l: " + singleton2Hits[0]);
+
+                // ===== Session 23 part 18: post-N.l JNI delta = calls N.l itself made =====
+                if (INSTALL_JNI_HOOKS_PRELOAD) {
+                    int jniTotalAfterNl = 0;
+                    for (int[] v : jniHits.values()) jniTotalAfterNl += v[0];
+                    int during = jniTotalAfterNl - jniTotalBeforeNl;
+                    System.out.println(">>> [p18 POST-N.l] JNI-env calls made DURING N.l = " + during
+                        + " (before=" + jniTotalBeforeNl + " after=" + jniTotalAfterNl + ")");
+                    System.out.println(">>> [p18 VERDICT] " + (during == 0
+                        ? "N.l made ZERO JNI-env calls before the 0x120381c1 fault -> the EXEC-loss is"
+                          + " NOT triggered by a JNIEnv function (valid: hooks proven live pre-N.l)."
+                          + " Next suspect: guest mprotect LINUX SYSCALL (SVC r7=125), unhooked so far."
+                        : "N.l DID call JNI-env fns -> inspect the '<<< NEAR 0x12038 CRASH WINDOW' lines above."));
+                }
 
                 // Session 23: re-check the SINGLETON bytes we force-wrote pre-N.l.
                 // If N.l did any real init, these should differ from our fake BX-LR-stub

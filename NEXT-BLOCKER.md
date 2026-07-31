@@ -1,4 +1,32 @@
-# Next Blocker — static-protect region-split RULED OUT (part 17); JNI-dispatch angle is the live lead
+# Next Blocker — JNI-env-mprotect RULED OUT (part 18, valid positive control); next suspect = guest mprotect LINUX SYSCALL (SVC r7=125)
+
+## Update (session 23 part 18) — JNI hooks done right: PROVEN live, and N.l makes ZERO JNI-env calls before the crash → EXEC-loss is NOT JNI-triggered
+
+Rebuilt #2 correctly (harness `_scratch/Unpack.java`, log `_scratch/p18_output.log` / `.40:~/xtv-ghidra/p18.log`):
+- **Installed the 8 JNI SVC hooks BEFORE `loadLibrary`** (part 14 installed them after, missing the init window — its whole "zero hits" was an artifact).
+- **Range-hooked `stub_base .. stub_base+8`**, not a single address. This is the fix that matters: FindClass fires at **both** `0xfffe00b0` and `0xfffe00b4` (base **+4**) — a single-addr hook (part 14) structurally misses the +4, exactly the `Unpack.java:819` warning.
+- **Added a real positive control:** snapshot JNI counts right before N.l. Result **PASS — 8 FindClass hits** (lr `0x120378c5`/`0x1203799b`/`0x120379e3`/`0x12037a41`, all libexec pre-N.l class resolution). Hooks are demonstrably live.
+
+**With the hooks PROVEN firing, the negative is now trustworthy (unlike part 14):**
+```
+[p18 POSITIVE-CONTROL] PASS — 8 JNI hook hits so far (incl. FindClass base+4); hooks are LIVE
+[p18 POST-N.l] JNI-env calls made DURING N.l = 0 (before=8 after=8)
+[p18 VERDICT] N.l made ZERO JNI-env calls before the 0x120381c1 fault
+```
+**No JNI env function is called between N.l entry and the `0x120381c1` FETCH_PROT fault.** The JNI-env-triggered-mprotect branch (reopened by the part-15 audit) is now **ruled out with evidence**, not left unconfirmed.
+
+Confirmed along the way: FindClass entry `r0 = 0xfffe12a0` = the JNIEnv pointer = the crash's `arg[0]`. So `s/h/e/l/l/N.l` genuinely receives JNIEnv as arg0 (it's a JNI method), but the fault is a code-fetch on a de-EXEC'd page, not a JNI dispatch.
+
+### Next suspect (part 19) — guest calls the `mprotect` LINUX SYSCALL directly (SVC, r7=125)
+Real Linux syscalls do **not** go through the JNIEnv function table — they hit unidbg's `SyscallHandler`. An `mprotect(0x12038000, len, prot_without_EXEC)` issued by guest code (the packer's own anti-tamper), or unidbg's own `AndroidElfLoader` PT_LOAD re-processing, would strip EXEC exactly as observed and would be **invisible to every hook tried so far** (all of which targeted JNI stubs or guest `bl` targets). This is the one un-instrumented path left.
+
+**Concrete build for next session:**
+- Hook the ARM `svc` path / override `SyscallHandler` (or add a code hook on the syscall stub) and log every `mprotect`/`mmap2`/`mprotect`-family syscall: NR (r7), r0=addr, r1=len, r2=prot. Flag any whose `[addr, addr+len)` covers `0x12038000` and whose prot lacks `PROT_EXEC`.
+- ARM32 syscall numbers: `mprotect`=125, `mmap2`=192, `munmap`=91. Watch all three.
+- Also instrument unidbg host-side: `AndroidElfLoader.java`'s own `mem_protect` on `PT_LOAD` segments (flagged part 14) — put a breakpoint/log there to see if a second load pass re-permissions the segment.
+- If the syscall path is also clean, the remaining possibility is a Unicorn-internal TB/permission quirk keyed to this specific sub-page — at which point test mapping `0x12038000` as its OWN standalone page (separate `mem_map`, not a sub-range of the big segment) so nothing can split it.
+
+---
 
 ## Update (session 23 part 17) — dropped the lone static protect, crash byte-identical → region-split DEAD; pivot to JNI
 
