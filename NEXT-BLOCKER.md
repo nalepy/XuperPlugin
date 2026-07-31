@@ -1,4 +1,37 @@
-# Next Blocker — guest-syscall EXEC-strip RULED OUT (part 19); EXEC is lost HOST-SIDE, between the function's 1st and 2nd entry
+# Next Blocker — crash root-caused (part 20-21): re-entrant Function32 dispatch via cB's `blx r5` (0x1203a7a4) into a non-exec 0x120381c0
+
+## Update (session 23 part 20-21) — localized to cB=0x1203a760, then disassembled the crash region; the fault is a NESTED re-entry, not an mprotect
+
+**Part 20 (callee-bracket):** hooked the entry + known callees and re-asserted RWX at each. Execution order:
+```
+ENTRY_381c0  lr=0xffff0000   (harness Java->native dispatch)
+cA_3b520     lr=0x120381e9   (bl at 0x120381e4, returns OK)
+cB_3a760     lr=0x12038289   (bl at 0x12038284)   <-- LAST event
+=> CRASH 0x120381c1
+```
+**cC_3a7d4 (called at 0x1203828c) and cD never fire → cB never returns.** RWX re-assert did NOT clear the crash (the strip is atomic with the re-fetch; no bracket fires between). Trigger localized to **cB = `0x1203a760`**.
+
+**Part 21 (disasm, runtime bytes, `_scratch/p21_disasm.txt`):** decoded the whole crash region.
+- Entry `0x120381c0` is the packer init (allocs a 20KB frame, `sub.w sp,sp,#0x5000`); its body is dense with vtable dispatches (`blx r0/r2`) through a context object at `[fp]`/`[sl]`.
+- At `0x12038284` it calls cB. Inside cB:
+  ```
+  0x1203a78c: ldr r0,[r0,#0x10]   ; r0 = global->vtable
+  0x1203a78e: ldr r5,[r0]         ; r5 = vtable[0]
+  0x1203a7a4: blx r5              ; <<< indirect dispatch — dies here
+  ```
+- unidbg reports the fault as `Runnable|Function32 address=0x120381c1, arguments=[JNIEnv=0xfffe12a0, ...]`.
+
+**Root cause:** cB's `blx r5` (through `[[[global]]+0x10][0]`) triggers a **nested re-entry into `0x120381c0`** as a unidbg `Function32` call, and that nested entry faults `FETCH_PROT`. Combined with part 19 (no mprotect / no syscall), the page is **not being actively de-EXEC'd** — the *nested Function32 re-entry* simply sees `0x12038000` as non-exec. So this is a **unidbg re-entrancy / bad-vtable-pointer artifact**, not a guest anti-tamper action. cC/cD never run because cB never returns from that `blx r5`.
+
+### Next build (part 22) — pin down r5 and the re-entry
+1. **Log r5 (the `blx r5` target) at `0x1203a7a4`** plus the pointer chain `[[[global]]+0x10][0]`, and the raw bytes of that vtable. Question: is `r5 == 0x120381c1` (our synthetic SINGLETON vtable mis-pointing back into the entry) or a legitimate distinct address?
+   - If r5 is **our stub** mis-pointing to `0x120381c0`: the fix is to populate that specific vtable slot with the correct target instead of the blanket BX-LR/entry fill — a data fix, likely unblocks N.l.
+   - If r5 is a **genuine re-entrant native call** into the same function: this is unidbg's `Function32` not preserving EXEC across nested native invocations. Workaround: re-map `0x12038000` as its own standalone page, or pre-assert RWX inside a hook on `0x1203a7a4` right before the `blx` (a bracket point that DOES fire before the re-entry, unlike the atomic re-fetch).
+2. The `0x1203a7a4` hook is the key new instrument — it fires immediately before the fatal `blx r5`, the one place a re-assert or a pointer-fix can still intervene.
+
+---
+
+# (superseded) guest-syscall EXEC-strip RULED OUT (part 19)
 
 ## Update (session 23 part 19) — no syscall fires in the crash path; the strip is host-side, between two entries of the crashing fn
 

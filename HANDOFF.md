@@ -4,7 +4,28 @@ For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md),
 [SESSION-2026-07-29.md](SESSION-2026-07-29.md) first.
 
-## TL;DR (session 23 part 19 — 2026-07-31) — READ THIS FIRST
+## TL;DR (session 23 part 20-21 — 2026-07-31) — READ THIS FIRST
+
+**Crash root-caused.** `N.l` faults at `0x120381c1` (FETCH_PROT) because of a **nested re-entry**, not
+an active de-EXEC:
+
+- **Part 20 (callee-bracket):** execution order is ENTRY(`0x120381c0`) → cA(`0x1203b520`, returns) →
+  **cB(`0x1203a760`)** → CRASH. cC(`0x1203a7d4`)/cD never fire → **cB never returns.** Trigger = cB.
+- **Part 21 (disasm, `_scratch/p21_disasm.txt`):** inside cB, `0x1203a78e: ldr r5,[r0]` (r5 = a global
+  vtable[0]) then `0x1203a7a4: blx r5`. That `blx r5` **re-enters `0x120381c0` as a unidbg `Function32`
+  call** (fault line says `Function32 address=0x120381c1, args=[JNIEnv=0xfffe12a0,...]`), and the nested
+  entry sees the page non-exec.
+- Part 19 already proved **no mprotect/no syscall** does the stripping → the page isn't actively
+  de-EXEC'd; the nested Function32 re-entry just sees it non-exec. **unidbg re-entrancy / bad vtable
+  pointer**, not guest anti-tamper.
+
+**NEXT (part 22):** hook `0x1203a7a4` (fires right before the fatal `blx r5` — the one place to
+intervene). Log r5 + the `[[[global]]+0x10][0]` chain + vtable bytes. If `r5==0x120381c1` it's our
+synthetic SINGLETON vtable mis-pointing into the entry → fix that slot (likely unblocks N.l). If r5 is
+a real re-entrant native addr → pre-assert RWX in the `0x1203a7a4` hook, or map `0x12038000` standalone.
+Full spec in NEXT-BLOCKER part-20-21 section.
+
+## TL;DR (session 23 part 19 — 2026-07-31)
 
 **The blocker is unchanged: `N.l` faults at `0x120381c1` with `UC_ERR_FETCH_PROT` — page `0x12038000`
 loses EXEC.** This session eliminated the last three guest-visible suspects with hard evidence

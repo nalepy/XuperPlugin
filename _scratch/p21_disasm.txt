@@ -1,0 +1,37 @@
+Session 23 part 21 — crash-region disassembly (Thumb), runtime bytes from libexec.so under unidbg.
+
+=== 0x120381c0 (ENTRY, the crashing fn / N.l native) ===
+0x120381c0: push {r4,r5,r6,r7,lr}
+0x120381c4: push.w {r8,sb,sl,fp}
+0x120381c8: sub.w sp, sp, #0x5000      ; 20KB frame
+0x120381ce: mov sl, r0                 ; sl = arg0 (JNIEnv/ctx)
+0x120381e4: bl 0x1203b520              ; cA  -> returns 0x120381e8 (fires in trace)
+0x120381e8: cbz r0, 0x1203820e
+0x120381ea: <loop-back target>
+...
+=== entry body around the cB call (0x12038200-0x12038300) ===
+0x12038270: blx r0                     ; vtable dispatch (before cB)
+0x12038284: bl 0x1203a760              ; cB  (fires in trace, lr=0x12038289)
+0x1203828c: bl 0x1203a7d4              ; cC  (NEVER fires -> cB doesn't return)
+0x12038292: beq 0x120381ea
+0x120382b0: blx r2 ; 0x120382c0: blx r2 ; 0x120382d0: blx r2 ; 0x120382dc: blx r0
+  -- entry body is dense with vtable dispatches through the ctx object at [fp]/[sl]
+
+=== 0x1203a760 (cB — LAST callee before fault) ===
+0x1203a76c: ldr r0,[pc,#0x50] ; add r0,pc ; ldr r6,[r0]   ; r6 = &__stack_chk_guard
+0x1203a774: ldr r0,[r6] ; str r0,[sp,#0xc]                ; stack canary
+0x1203a77c: bl 0x1203b6f8
+0x1203a780: cbz r0, 0x1203a7a8
+0x1203a78c: ldr r0,[r0,#0x10]                             ; r0 = global->vtable
+0x1203a78e: ldr r5,[r0]                                   ; r5 = vtable[0]  (fn ptr)
+0x1203a7a4: blx r5              ; <<< INDIRECT DISPATCH — re-enters 0x120381c0 (Function32), FAULTS
+0x1203a7a8: ldr r0,[r6] ; ldr r1,[sp,#0xc] ; cmp          ; canary check
+0x1203a7b8: popeq {r4,r5,r6,r7,pc}                        ; normal return (never reached)
+0x1203a7ba: blx 0x1207b310                                ; __stack_chk_fail
+
+VERDICT: crash = nested Function32 re-entry into 0x120381c0 via cB's blx r5 (0x1203a7a4),
+onto a page unidbg reports non-exec on the nested entry. NOT an mprotect (part 19). cC/cD never run.
+NEXT: log r5 (vtable[0] target) + the [[[global]]+0x10] pointer chain at 0x1203a7a4; confirm whether
+r5 legitimately == 0x120381c1 (bad synthetic-vtable pointer) or a real addr, and whether unidbg's
+re-entrant Function32 path keeps EXEC. If r5 is our synthetic SINGLETON stub mis-pointing to the entry,
+fix the vtable slot; if it's a genuine re-entrant native call, address unidbg Function32 re-entrancy.

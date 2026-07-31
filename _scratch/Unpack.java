@@ -1992,6 +1992,47 @@ public class Unpack extends AbstractJni {
                         t.printStackTrace(System.out);
                     }
                 }
+
+                // ===== Session 23 part 20: callee-bracket + RWX re-assert =====
+                // Part 19 localized the EXEC-strip to unidbg host-side, DURING entry #1's body: the
+                // fault is a re-fetch of the function's FIRST instruction (0x120381c0/Thumb 0x120381c1),
+                // so the body ran once then re-entry can't even fetch insn #1. The trigger must be a
+                // host-side side-effect of one of the body's callees. Hook the entry + each known
+                // callee (part 9-11: bl 0x1203b520 / 0x1203a760 / 0x1203a7d4, + 0x1203b684), record
+                // execution ORDER, and re-assert RWX on 0x12038000 at each pass. The LAST bracket
+                // event before the crash localizes the trigger for part 21. If re-asserting clears the
+                // crash, that is also a viable workaround.
+                final boolean INSTALL_CALLEE_BRACKET = true;
+                final java.util.List<String> calleeTrace = new java.util.ArrayList<String>();
+                if (INSTALL_CALLEE_BRACKET) {
+                    final long[] cAddrs = {0x120381c0L, 0x1203b520L, 0x1203a760L, 0x1203a7d4L, 0x1203b684L};
+                    final String[] cNames = {"ENTRY_381c0", "cA_3b520", "cB_3a760", "cC_3a7d4", "cD_3b684"};
+                    for (int ci = 0; ci < cAddrs.length; ci++) {
+                        final long caddr = cAddrs[ci];
+                        final String cname = cNames[ci];
+                        final int[] chits = {0};
+                        backend.hook_add_new(new CodeHook() {
+                            public void hook(Backend b, long address, int size, Object user) {
+                                int n = ++chits[0];
+                                long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue() & 0xffffffffL;
+                                if (calleeTrace.size() < 400)
+                                    calleeTrace.add(cname + "#" + n + " lr=0x" + Long.toHexString(lr));
+                                // Re-assert RWX on the crash page at every bracket pass. Can't beat a
+                                // fetch-time strip at the entry itself, but if the strip happens in a
+                                // callee and a later bracket fires before the re-fetch, this restores it.
+                                try { b.mem_protect(0x12038000L, 0x2000,
+                                    UnicornConst.UC_PROT_READ | UnicornConst.UC_PROT_WRITE | UnicornConst.UC_PROT_EXEC);
+                                } catch (Throwable t) { /* best-effort */ }
+                                if (n <= 4)
+                                    System.out.println(">>> [p20 " + cname + "] hit #" + n
+                                        + " lr=0x" + Long.toHexString(lr) + " (RWX re-asserted)");
+                            }
+                            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                            public void detach() {}
+                        }, caddr, caddr, null);
+                        System.out.println(">>> [p20] bracket hook @0x" + Long.toHexString(caddr) + " (" + cname + ")");
+                    }
+                }
                 // Pre-map a large low-memory range for the libexec memory scan loop (libexec 0x3b72d)
                 // and the N.l decrypted-code output region (~0x11000000-0x12000000). The scan walks
                 // linearly from 0x1000 upward through every page. On real hardware the linker data
@@ -2716,6 +2757,20 @@ public class Unpack extends AbstractJni {
                 // libexec's pre-N.l class resolution has now run. If ANY JNI hook fired, the
                 // technique is proven live (the check part 14 skipped). Snapshot totals so the
                 // post-N.l delta shows exactly which JNI fns, if any, N.l itself calls.
+                // Session 23 part 21: dump the part-20 trigger callee (0x1203a760) + its return/
+                // loopback site (0x12038280) + the entry (0x120381c0) as runtime hex for offline
+                // capstone disassembly — this is the packer's decrypted code, not in the static .so.
+                for (long[] d : new long[][]{{0x1203a760L, 0x80}, {0x12038200L, 0x100}, {0x120381c0L, 0x60}}) {
+                    try {
+                        byte[] bs = backend.mem_read(d[0], (int) d[1]);
+                        StringBuilder sb = new StringBuilder(">>> [p21 DUMP@0x" + Long.toHexString(d[0]) + "] ");
+                        for (byte x : bs) sb.append(String.format("%02x", x & 0xff));
+                        System.out.println(sb);
+                    } catch (Throwable t) {
+                        System.out.println(">>> [p21 DUMP@0x" + Long.toHexString(d[0]) + "] FAILED: " + t);
+                    }
+                }
+
                 int jniTotalBeforeNl = 0;
                 if (INSTALL_JNI_HOOKS_PRELOAD) {
                     System.out.println(">>> [p18 PRE-N.l] JNI totals:");
@@ -2780,6 +2835,19 @@ public class Unpack extends AbstractJni {
                         System.out.println(">>> [p19] mem-syscalls occurred; scan for '<<< COVERS 0x12038000' /"
                             + " '*** STRIPS EXEC ***' above to see if one hit our page.");
                     }
+                }
+                if (INSTALL_CALLEE_BRACKET) {
+                    int sz = calleeTrace.size();
+                    System.out.println(">>> [p20 CALLEE-TRACE] " + sz + " bracket events; tail (last-before-fault):");
+                    for (int i = Math.max(0, sz - 20); i < sz; i++)
+                        System.out.println(">>>   " + calleeTrace.get(i));
+                    if (sz > 0)
+                        System.out.println(">>> [p20] LAST bracket event = " + calleeTrace.get(sz - 1)
+                            + " -> the EXEC-strip trigger is in/after this callee; disassemble it (part 21)."
+                            + " If N.l progressed past 0x120381c1, the RWX re-assert is a workaround.");
+                    else
+                        System.out.println(">>> [p20] ZERO bracket events -> none of entry/cA/cB/cC/cD executed"
+                            + " before the fault; the crash precedes them, re-scope the callee set.");
                 }
 
                 // Session 23: re-check the SINGLETON bytes we force-wrote pre-N.l.
