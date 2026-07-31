@@ -1,4 +1,25 @@
-# Next Blocker — JNI-env-mprotect RULED OUT (part 18, valid positive control); next suspect = guest mprotect LINUX SYSCALL (SVC r7=125)
+# Next Blocker — guest-syscall EXEC-strip RULED OUT (part 19); EXEC is lost HOST-SIDE, between the function's 1st and 2nd entry
+
+## Update (session 23 part 19) — no syscall fires in the crash path; the strip is host-side, between two entries of the crashing fn
+
+Built the syscall interceptor (`_scratch/Unpack.java`, log `_scratch/p19_output.log` / `.40:~/xtv-ghidra/p19.log`) and, learning from part 14/18, **positive-controlled it before trusting the result.** Two independent instruments agree:
+
+- **Backend `InterruptHook` — 0 fires (positive control FAIL).** Added an all-interrupt counter (`intAll`) before the NR filter; it stayed 0 for the whole run. **A user-registered `InterruptHook` is NOT wired to guest `svc` in this Unicorn2 backend** (`Unicorn2Factory(false)`), so a bare InterruptHook can never see syscalls here. Any future syscall instrumentation must **subclass `ARM32SyscallHandler`** (override `hook`/`mprotect`) and wire it into the emulator builder — the InterruptHook shortcut is a dead end, now proven, don't retry it.
+- **69 static `svc`-byte CodeHooks over 0x12037000–0x1203c000 (which covers the crash page) — 0 fires.** No `svc` instruction in the crash region executes before the fault.
+
+**Conclusion: no guest syscall happens in the path to `0x120381c1`.** Combined with part 18 (no JNI-env call) and part 17 (our protect is a no-op), the EXEC-loss is **not** caused by anything the guest explicitly does through a call/syscall we can see.
+
+**The sharpened picture (cross-referencing part 12):** the crashing function at `0x120381c0` (Thumb `0x120381c1`) **enters once successfully** — part 12 logged entry #1 with `LR=0xffff0000` (unidbg's top-level Java→native dispatch calling `N.l`). The crash is a **second** entry, reported by unidbg as `Runnable|Function32 address=0x120381c1` — i.e. unidbg re-invoking the function as a host-side callback. **EXEC is stripped between entry #1 (works) and entry #2 (faults).** Nothing guest-visible runs in that gap → the strip is **host-side, inside unidbg's own machinery** (ELF loader re-pass, or a Memory.mprotect triggered by the Function32 re-dispatch path).
+
+### Next build (part 20) — host-side instrumentation
+1. **Subclass `com.github.unidbg.linux.ARM32SyscallHandler`** (or `AndroidSyscallHandler`); override `mprotect(...)` and the svc `hook(...)`. Log every mprotect(addr,len,prot); flag any covering `0x12038000` without `PROT_EXEC=4`. Wire via the emulator builder. This catches host-side mprotect the InterruptHook could not.
+2. **Instrument the entry#1 → entry#2 gap.** Put a CodeHook at `0x120381c0` (entry, fires — part 12 proved it) that on entry #1 records "exec ok", and log everything unidbg does before the Function32 re-entry. Specifically check whether the re-entry is the harness's own `callStaticJniMethodBoolean` returning into a native callback, and whether unidbg's `AndroidElfLoader` runs a second `PT_LOAD` protect pass.
+3. **Cheap probe worth trying first:** after entry #1 succeeds, check the exec state of `0x12038000` (attempt a controlled re-protect-to-RWX and log if it reports already-mapped/permission change) to bracket exactly when EXEC disappears.
+4. **Last-resort fix regardless of cause:** re-map `0x12038000` as its OWN standalone page at load (separate `mem_map`, not a sub-range of the big libexec segment) so no host-side segment re-pass can split/de-EXEC it.
+
+---
+
+# (superseded) JNI-env-mprotect RULED OUT (part 18, valid positive control)
 
 ## Update (session 23 part 18) — JNI hooks done right: PROVEN live, and N.l makes ZERO JNI-env calls before the crash → EXEC-loss is NOT JNI-triggered
 

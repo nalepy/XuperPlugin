@@ -4,28 +4,33 @@ For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md),
 [SESSION-2026-07-29.md](SESSION-2026-07-29.md) first.
 
-## TL;DR (session 23 part 18 — 2026-07-31) — READ THIS FIRST
+## TL;DR (session 23 part 19 — 2026-07-31) — READ THIS FIRST
 
 **The blocker is unchanged: `N.l` faults at `0x120381c1` with `UC_ERR_FETCH_PROT` — page `0x12038000`
-loses EXEC mid-execution.** This session eliminated the two remaining strong suspects with hard
-evidence, and named the next one.
+loses EXEC.** This session eliminated the last three guest-visible suspects with hard evidence
+(each with a positive control) and localized the cause to unidbg host-side code.
 
 - **Part 17 — static-protect region-split RULED OUT.** Gated the lone static `mem_protect(0x12038000,0x2000)`
-  before N.l (`BISECT_NO_STATIC_PROTECT=true`, `Unpack.java:39`). Crash byte-for-byte identical → the
-  protect was a no-op, region-split theory dead.
-- **Part 18 — JNI-env-mprotect RULED OUT, this time validly.** Reinstalled the 8 JNI SVC hooks
-  BEFORE `loadLibrary` (part 14 wrongly installed them after) and range-hooked `base..base+8`
-  (catches FindClass's +4 that part 14 missed). Positive control **PASS** (8 FindClass hits pre-N.l),
-  and **N.l makes ZERO JNI-env calls before the fault**. Hooks proven live → the negative is trustworthy.
-- **JNIEnv = `0xfffe12a0`** (FindClass r0) = the crash's `arg[0]`. N.l is a JNI method that receives
-  JNIEnv, but the fault is a code-fetch on a de-EXEC'd page, not a JNI dispatch.
+  (`BISECT_NO_STATIC_PROTECT=true`, `Unpack.java`). Crash byte-identical → protect was a no-op.
+- **Part 18 — JNI-env-mprotect RULED OUT (valid positive control).** 8 JNI SVC hooks installed BEFORE
+  `loadLibrary`, range-hooked `base..base+8` (catches FindClass's +4). Positive control **PASS**
+  (8 FindClass hits), **0 JNI-env calls during N.l**. Hooks proven live → trustworthy negative.
+- **Part 19 — guest-syscall EXEC-strip RULED OUT.** Syscall interceptor + positive control: Backend
+  `InterruptHook` fires **0** times (NOT wired to svc in the `Unicorn2Factory(false)` backend — a bare
+  InterruptHook is a dead end here, use a `ARM32SyscallHandler` subclass instead), AND 69 static
+  svc-byte CodeHooks over the crash region fire **0** times. No syscall in the crash path.
 
-**NEXT (part 19): the one un-instrumented path — guest `mprotect` LINUX SYSCALL (SVC, r7=125).**
-Linux syscalls bypass the JNIEnv table and hit unidbg's `SyscallHandler`; nothing so far hooks that.
-Full build spec is in NEXT-BLOCKER.md's part-18 section (hook the svc/SyscallHandler, log
-`mprotect`=125 / `mmap2`=192 / `munmap`=91 with addr/len/prot, flag any covering `0x12038000` without
-PROT_EXEC; also check unidbg `AndroidElfLoader` PT_LOAD re-protect; last resort: map `0x12038000` as
-its own standalone page).
+**Localized cause:** the crashing fn **enters once successfully** (part 12: entry #1, `LR=0xffff0000`,
+harness dispatch) then a **second entry via unidbg `Function32` re-dispatch faults**. EXEC is stripped
+**between the two entries**, and it's not guest svc / not JNI / not our protect → **host-side, inside
+unidbg** (ELF-loader re-pass or a Memory.mprotect on the Function32 path).
+
+**NEXT (part 20): host-side instrumentation.** Full spec in NEXT-BLOCKER.md part-19 section:
+(1) subclass `ARM32SyscallHandler`, override `mprotect`/`hook`, wire into the builder, log any mprotect
+covering `0x12038000` without PROT_EXEC; (2) instrument the entry#1→entry#2 gap (CodeHook at
+`0x120381c0` fires — part 12 proved it); (3) cheap probe: check `0x12038000` exec-state right after
+entry #1; (4) last-resort fix: map `0x12038000` as its OWN standalone page at load so no host re-pass
+can de-EXEC it.
 
 ### Ops notes for the next agent (verified working this session)
 - **`.40` (unidbg host) SSH now key-based:** `ssh xtv40` (alias in `~/.ssh/config`, key `~/.ssh/id_xtv40`).

@@ -1938,6 +1938,60 @@ public class Unpack extends AbstractJni {
                     }
                     System.out.println(">>> SVC scan: " + nSvc + " SVC hooks installed");
                 }
+
+                // ===== Session 23 part 19: syscall interceptor (InterruptHook) =====
+                // Location/timing-agnostic catch for the mprotect that strips EXEC from 0x12038000.
+                // A guest `svc` raises a Unicorn interrupt; unidbg's SyscallHandler dispatches it.
+                // We fire on the same interrupt and read the ARM-EABI syscall regs: r7=NR, r0=addr,
+                // r1=len, r2=prot. Unlike the static SVC-byte scan above (which only hooks svc bytes
+                // already present in 0x12037000-0x1203c000 at scan time), this catches svc issued
+                // from anywhere and from code decrypted INTO memory DURING N.l — the un-instrumented
+                // path from part 18's verdict. PROT_EXEC=4; mprotect=125, mmap2=192, munmap=91 (ARM32).
+                final boolean INSTALL_SYSCALL_HOOK = true;
+                final int[] syscallSeen = {0};
+                final int[] intAll = {0};   // POSITIVE CONTROL: total interrupt fires (any NR)
+                if (INSTALL_SYSCALL_HOOK) {
+                    try {
+                        backend.hook_add_new(new com.github.unidbg.arm.backend.InterruptHook() {
+                            public void hook(Backend b, int intno, int swi, Object user) {
+                                try {
+                                    long nr = b.reg_read(ArmConst.UC_ARM_REG_R7).longValue();
+                                    // POSITIVE CONTROL: prove this hook actually fires on guest svc.
+                                    // If total stays 0 while the run makes syscalls, the InterruptHook
+                                    // path is not wired to svc in this backend and any "0 mprotect"
+                                    // result is meaningless (must subclass SyscallHandler instead).
+                                    int t = ++intAll[0];
+                                    if (t <= 8) {
+                                        System.out.println(">>> [p19 INT-CTRL] interrupt #" + t
+                                            + " intno=" + intno + " swi=" + swi + " r7(NR)=" + nr);
+                                    }
+                                    if (nr != 125 && nr != 192 && nr != 91) return; // mem syscalls only
+                                    long a0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue() & 0xffffffffL;
+                                    long a1 = b.reg_read(ArmConst.UC_ARM_REG_R1).longValue() & 0xffffffffL;
+                                    long a2 = b.reg_read(ArmConst.UC_ARM_REG_R2).longValue() & 0xffffffffL;
+                                    long pc = b.reg_read(ArmConst.UC_ARM_REG_PC).longValue() & 0xffffffffL;
+                                    String name = nr == 125 ? "mprotect" : nr == 192 ? "mmap2" : "munmap";
+                                    boolean coversPage = (a0 <= 0x12038000L && 0x12038000L < a0 + a1);
+                                    boolean stripsExec = (nr == 125) && ((a2 & 0x4L) == 0);
+                                    if (syscallSeen[0]++ < 40 || coversPage) {
+                                        System.out.println(">>> [p19 SYSCALL " + name + "] pc=0x" + Long.toHexString(pc)
+                                            + " addr=0x" + Long.toHexString(a0)
+                                            + " len=0x" + Long.toHexString(a1)
+                                            + " prot=0x" + Long.toHexString(a2)
+                                            + (coversPage ? "  <<< COVERS 0x12038000" : "")
+                                            + (coversPage && stripsExec ? "  *** STRIPS EXEC — THIS IS THE BUG ***" : ""));
+                                    }
+                                } catch (Throwable t) { /* best-effort, never perturb the run */ }
+                            }
+                            public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                            public void detach() {}
+                        }, null);
+                        System.out.println(">>> [p19] syscall InterruptHook installed (mprotect/mmap2/munmap)");
+                    } catch (Throwable t) {
+                        System.out.println(">>> [p19] syscall InterruptHook FAILED: " + t);
+                        t.printStackTrace(System.out);
+                    }
+                }
                 // Pre-map a large low-memory range for the libexec memory scan loop (libexec 0x3b72d)
                 // and the N.l decrypted-code output region (~0x11000000-0x12000000). The scan walks
                 // linearly from 0x1000 upward through every page. On real hardware the linker data
@@ -2710,6 +2764,22 @@ public class Unpack extends AbstractJni {
                           + " NOT triggered by a JNIEnv function (valid: hooks proven live pre-N.l)."
                           + " Next suspect: guest mprotect LINUX SYSCALL (SVC r7=125), unhooked so far."
                         : "N.l DID call JNI-env fns -> inspect the '<<< NEAR 0x12038 CRASH WINDOW' lines above."));
+                }
+                if (INSTALL_SYSCALL_HOOK) {
+                    System.out.println(">>> [p19 SYSCALL SUMMARY] total interrupts seen = " + intAll[0]
+                        + "; mprotect/mmap2/munmap = " + syscallSeen[0] + ".");
+                    if (intAll[0] == 0) {
+                        System.out.println(">>> [p19 INT-CTRL] *** FAIL *** — 0 interrupts fired. The Backend"
+                            + " InterruptHook is NOT wired to guest svc in this backend; the '0 mprotect' result"
+                            + " is MEANINGLESS. Next: subclass ARM32SyscallHandler (override hook/mprotect) instead.");
+                    } else if (syscallSeen[0] == 0) {
+                        System.out.println(">>> [p19 INT-CTRL] PASS (" + intAll[0] + " interrupts) but ZERO mem-syscalls"
+                            + " -> the EXEC-strip is genuinely NOT a guest mprotect/mmap2/munmap. Next check unidbg"
+                            + " host-side (AndroidElfLoader PT_LOAD re-protect), then map 0x12038000 as its own page.");
+                    } else {
+                        System.out.println(">>> [p19] mem-syscalls occurred; scan for '<<< COVERS 0x12038000' /"
+                            + " '*** STRIPS EXEC ***' above to see if one hit our page.");
+                    }
                 }
 
                 // Session 23: re-check the SINGLETON bytes we force-wrote pre-N.l.
