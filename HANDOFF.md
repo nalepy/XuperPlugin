@@ -4,7 +4,27 @@ For the next agent continuing XuperPlugin. Read [README.md](README.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [NEXT-BLOCKER.md](NEXT-BLOCKER.md),
 [SESSION-2026-07-29.md](SESSION-2026-07-29.md) first.
 
-## TL;DR (session 23 part 20-21 — 2026-07-31) — READ THIS FIRST
+## TL;DR (session 23 part 22 — 2026-07-31) — *** BLOCKER SOLVED *** READ THIS FIRST
+
+**The 0x120381c1 FETCH_PROT blocker (sessions 17-23) is SOLVED. N.l now runs end-to-end.**
+
+It was never an EXEC loss. Root cause: cE (`0x1203b6f8`) does `ldr r5,[global->vtable+0x44]; blx r5`
+at `0x1203b72a`, and **r5 = 0** — vtable slot 0x44 is EMPTY (one our own harness zero-fills). `blx 0`
+is the fault; unidbg **mislabels** it as the enclosing `Function32@0x120381c1` (N.l's frame), which is
+why 6 parts read it as "page 0x12038000 lost EXEC." The page never lost EXEC — parts 17/18/19 negatives
+(no protect / no JNI / no syscall) were all correct; the *premise* was wrong.
+
+**Fix (working):** CodeHook at `0x1203b72a`; when `r5==0`, force `r5=VTABLE_STUB|1`. Result: **`N.l
+returned: false`** instead of throwing. N.l executes fully for the first time. (flag `INSTALL_BLX_R5_HOOK`
+in `_scratch/Unpack.java`; log `_scratch/p22_output.log`.)
+
+**NEXT (part 23): N.l returns FALSE, not TRUE.** The stub returns a dummy 1; real success needs the
+actual vtable callbacks. See NEXT-BLOCKER part-22 section: populate vtable[0x44] (+ the [0x10]-relative
+slots 0x54/0x60/0x64/0xa4/0x1b8 the entry body uses) with genuine libexec function pointers instead of
+zero/stub; move the fix into the pre-N.l VTABLE setup; dump the object fields N.l sets to see which check
+returns false; then re-run b2b (still null) with N.l state initialized.
+
+## TL;DR (session 23 part 20-21 — 2026-07-31)
 
 **Crash root-caused.** `N.l` faults at `0x120381c1` (FETCH_PROT) because of a **nested re-entry**, not
 an active de-EXEC:

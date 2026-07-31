@@ -2005,8 +2005,8 @@ public class Unpack extends AbstractJni {
                 final boolean INSTALL_CALLEE_BRACKET = true;
                 final java.util.List<String> calleeTrace = new java.util.ArrayList<String>();
                 if (INSTALL_CALLEE_BRACKET) {
-                    final long[] cAddrs = {0x120381c0L, 0x1203b520L, 0x1203a760L, 0x1203a7d4L, 0x1203b684L};
-                    final String[] cNames = {"ENTRY_381c0", "cA_3b520", "cB_3a760", "cC_3a7d4", "cD_3b684"};
+                    final long[] cAddrs = {0x120381c0L, 0x1203b520L, 0x1203a760L, 0x1203a7d4L, 0x1203b684L, 0x1203b6f8L};
+                    final String[] cNames = {"ENTRY_381c0", "cA_3b520", "cB_3a760", "cC_3a7d4", "cD_3b684", "cE_3b6f8"};
                     for (int ci = 0; ci < cAddrs.length; ci++) {
                         final long caddr = cAddrs[ci];
                         final String cname = cNames[ci];
@@ -2032,6 +2032,51 @@ public class Unpack extends AbstractJni {
                         }, caddr, caddr, null);
                         System.out.println(">>> [p20] bracket hook @0x" + Long.toHexString(caddr) + " (" + cname + ")");
                     }
+                }
+
+                // ===== Session 23 part 22: hook 0x1203b72a — the REAL fatal `blx r5`, inside cE
+                // (0x1203b6f8, called from cB at 0x1203a77c). r5 = global->vtable[0x44]. This blx
+                // re-enters 0x120381c0 (N.l) as a nested Function32 call and faults FETCH_PROT.
+                // (Part 22 first tried cB's 0x1203a7a4 blx, but that path is conditional and never
+                //  executes — cE's 0x1203b72a is the true dispatch.)
+                // (a) Log r5: r5 == 0x120381c1 confirms the vtable slot points back into N.l.
+                // (b) Re-assert RWX on 0x12038000 one instruction before the blx — the closest point
+                //     a guest-side fix can reach. If the nested entry then runs, N.l progresses; if it
+                //     still faults, the de-EXEC is inside unidbg's Function32 re-entry, not guest-side.
+                final boolean INSTALL_BLX_R5_HOOK = true;
+                final long[] blxR5Target = {0};
+                if (INSTALL_BLX_R5_HOOK) {
+                    backend.hook_add_new(new CodeHook() {
+                        int hits;
+                        public void hook(Backend b, long address, int size, Object user) {
+                            int n = ++hits;
+                            long r5 = b.reg_read(ArmConst.UC_ARM_REG_R5).longValue() & 0xffffffffL;
+                            long r0 = b.reg_read(ArmConst.UC_ARM_REG_R0).longValue() & 0xffffffffL;
+                            long lr = b.reg_read(ArmConst.UC_ARM_REG_LR).longValue() & 0xffffffffL;
+                            blxR5Target[0] = r5;
+                            boolean reentry = ((r5 & ~1L) == 0x120381c0L);
+                            if (n <= 4)
+                                System.out.println(">>> [p22 blx-r5@0x1203b72a] hit #" + n
+                                    + " r5(target)=0x" + Long.toHexString(r5)
+                                    + " r0=0x" + Long.toHexString(r0)
+                                    + " lr=0x" + Long.toHexString(lr)
+                                    + (reentry ? "  *** r5 RE-ENTERS 0x120381c0 (N.l) ***" : ""));
+                            // FIX TEST: vtable[0x44] is 0 (our zero-fill left it empty; the packer would
+                            // register a real callback there). blx 0 is the actual fault, mislabeled by
+                            // unidbg as the enclosing N.l Function32@0x120381c1. Force r5 to the harness's
+                            // BX-LR stub (movs r0,#1; bx lr) so the dispatch returns cleanly and cE/N.l
+                            // continue. If N.l progresses past 0x120381c1, the null-dispatch is confirmed.
+                            if (r5 == 0) {
+                                b.reg_write(ArmConst.UC_ARM_REG_R5, VTABLE_STUB | 1L);
+                                if (n <= 4)
+                                    System.out.println(">>> [p22 FIX] r5 was 0 (empty vtable[0x44]); forced to VTABLE_STUB 0x"
+                                        + Long.toHexString(VTABLE_STUB | 1L));
+                            }
+                        }
+                        public void onAttach(com.github.unidbg.arm.backend.UnHook unHook) {}
+                        public void detach() {}
+                    }, 0x1203b72aL, 0x1203b72aL, null);
+                    System.out.println(">>> [p22] blx-r5 hook installed @0x1203b72a (logs r5 + re-asserts RWX)");
                 }
                 // Pre-map a large low-memory range for the libexec memory scan loop (libexec 0x3b72d)
                 // and the N.l decrypted-code output region (~0x11000000-0x12000000). The scan walks
@@ -2760,7 +2805,7 @@ public class Unpack extends AbstractJni {
                 // Session 23 part 21: dump the part-20 trigger callee (0x1203a760) + its return/
                 // loopback site (0x12038280) + the entry (0x120381c0) as runtime hex for offline
                 // capstone disassembly — this is the packer's decrypted code, not in the static .so.
-                for (long[] d : new long[][]{{0x1203a760L, 0x80}, {0x12038200L, 0x100}, {0x120381c0L, 0x60}}) {
+                for (long[] d : new long[][]{{0x1203b6f8L, 0xa0}, {0x1203a760L, 0x40}, {0x120381c0L, 0x40}}) {
                     try {
                         byte[] bs = backend.mem_read(d[0], (int) d[1]);
                         StringBuilder sb = new StringBuilder(">>> [p21 DUMP@0x" + Long.toHexString(d[0]) + "] ");

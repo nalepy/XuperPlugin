@@ -1,4 +1,33 @@
-# Next Blocker — crash root-caused (part 20-21): re-entrant Function32 dispatch via cB's `blx r5` (0x1203a7a4) into a non-exec 0x120381c0
+# Next Blocker — *** SOLVED (part 22): the "EXEC loss" was a `blx` through a NULL vtable slot (0x44). N.l now RUNS end-to-end (returns false). New frontier: get N.l to return true. ***
+
+## Update (session 23 part 22) — BREAKTHROUGH: not an EXEC-loss at all, a null-pointer `blx`. N.l executes for the first time.
+
+The 0x120381c1 FETCH_PROT that consumed parts 16-21 was **misdiagnosed the whole time.** Root cause found:
+
+- cE = `0x1203b6f8` loads `r5 = global->vtable[0x44]` (`0x1203b716: ldr r5,[r1,#0x44]`) then `blx r5` at **`0x1203b72a`**.
+- **At runtime r5 = 0x0.** Vtable slot 0x44 is EMPTY — it's one of the slots our own harness **zero-fills** (`for i<64: mem_write(VTABLE+i*4,{0,0,0,0})` in the pre-N.l setup). The real packer registers a callback there during a full init we don't reproduce.
+- `blx 0` is the actual fault. **unidbg mislabels it** as the enclosing `Function32 address=0x120381c1` (N.l's own frame) with N.l's args — which is why every prior part read it as "the entry page `0x12038000` lost EXEC." The page never lost EXEC. There was no mprotect (part 19 correct), no JNI trigger (part 18 correct), no region split (part 17 correct) — all those negatives were right; the premise ("EXEC loss") was the error.
+
+**The fix (confirmed working):** in a CodeHook at `0x1203b72a`, when `r5==0`, force `r5 = VTABLE_STUB|1` (the harness's `movs r0,#1; bx lr` stub). Result:
+```
+[p22 blx-r5@0x1203b72a] hit #1 r5(target)=0x0 ... [p22 FIX] forced to VTABLE_STUB 0x7f000801
+[p22 blx-r5@0x1203b72a] hit #2 r5(target)=0x0 ... [p22 FIX] forced to VTABLE_STUB 0x7f000801
+>>> N.l returned: false        <-- N.l RAN TO COMPLETION (was: FETCH_PROT throw)
+>>> SINGLETON2 dispatch count after N.l: 3
+>>> post-N.l scan: 453 non-zero pages in 0x10000000-0x21000000
+```
+N.l no longer throws — it executes fully and returns a boolean. `blx r5` fires twice (both slots empty), both forced to the stub.
+
+### New frontier (part 23) — N.l returns FALSE, not TRUE
+Execution is open but N.l reports failure. The stub returns a dummy `1`; the real logic needs the actual vtable[0x44] callback (and probably other empty slots) to behave correctly. Directions:
+1. **Populate the vtable properly, not with a BX-LR stub.** vtable[0x44] (and the slots at [0x10]-relative offsets the entry body reads: 0x54, 0x60, 0x64, 0x1b8, 0xa4, etc.) are real function pointers into libexec. Instead of zero/stub, point them at their genuine targets — the packer's own functions — so the callbacks do real work. Trace what vtable[0x44] is supposed to be (disasm the packer's init that would populate it on real Android, or find the function whose signature matches).
+2. **Move the fix out of the diagnostic hook** into the pre-N.l VTABLE setup: fill empty slots with the correct pointers (or the stub as a stopgap) at `0x120868e0`/the vtable base, rather than patching r5 live.
+3. **Check what N.l does with the false path** — dump the object fields N.l sets (`[fp]+0x0c/0x44/0x48/0x80/0xec/0x103/0x111`) after the run to see how far the real init got and which check returns false.
+4. Then re-attempt **b2b** (still returns null) with N.l's state actually initialized.
+
+---
+
+# (superseded) crash root-caused (part 20-21): re-entrant Function32 via cB's blx r5
 
 ## Update (session 23 part 20-21) — localized to cB=0x1203a760, then disassembled the crash region; the fault is a NESTED re-entry, not an mprotect
 
