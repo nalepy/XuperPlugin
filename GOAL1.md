@@ -2,7 +2,8 @@
 
 > **Self-contained handoff.** Everything an agent needs is in this file. Deeper detail lives in
 > `NEXT-BLOCKER.md`, `ARCHITECTURE.md`, `SESSION-2026-07-29.md`, and `_scratch/Unpack.java`, but you can
-> plan from this file alone. This file + `GOAL2.md` are the two canonical working docs from now on.
+> plan from this file alone. `GOAL0.md` (decrypted-DEX keystone), `GOAL1.md`, and `GOAL2.md` are the
+> three canonical working docs from now on.
 
 ## Objective
 Modify/crack the real XTV app (`com.android.mgstv` v4.34.5, ijiami-packed — a.k.a. BrazilTV) so it keeps
@@ -20,8 +21,10 @@ The `.4` live-memory carve (see `GOAL0.md`) **succeeded** — the decrypted app 
 memory and decompiled with jadx, bypassing the whole `N.l→true` wall. The entire emulation effort below
 existed ONLY to produce this DEX via `b2b`; **that is now moot for obtaining the code.** Goal 1's fastest
 path is now:
-1. Decompile the carved DEX (raw regions in `_session/dexdata_ca849000.bin` + `_session/dexdata_full_c9f0c000.bin`;
-   fix adler32/sha1, `jadx -d out` — see `GOAL0.md` for the exact carve steps).
+1. **Re-carve the DEX from `.4`** (the session-28 carve worked but its artifacts were NOT persisted —
+   they were cleaned from the scratchpad; see `GOAL0.md`). The method is proven/reproducible:
+   `dd /proc/<pid>/mem` over the `[anon:dalvik-DEX data]` regions, grep `dex\n035`, fix adler32/sha1,
+   `jadx -d out`. Save it somewhere durable this time.
 2. Search the decompiled source for the **email-registration / forced-update / payment-VIP gate checks**
    and map the minimal patches (force the unlocked branch). Targets listed in `GOAL0.md` "Goal 1 targets".
 3. Then tackle the REAL remaining wall for Goal 1: **re-locking** — repack under ijiami (resists it) or
