@@ -555,8 +555,14 @@ class XuperApiClient(context: Context) {
             put("apkVersion", c.apkVersion)
             put("appId", c.appId)
             put("appLanguage", c.appLanguage)
-            put("b29", c.b29)
-            put("contentType", "application/json;charset=utf-8")
+            // WIRE-EXACT (DEX dump .4, interceptor ld.b.a()): the real app's request
+            // interceptor emits the key "B29" (uppercase) and does NOT put contentType in
+            // the body (contentType is a header, added by interceptor ld.a). This makes our
+            // body field-set byte-identical to the real app's. NOTE: live replay proved this
+            // alone does NOT clear portal200001 — see GOAL2.md session 28: the version-gate
+            // is enforced above the request body (TLS/client-identity + runtime host pool),
+            // not by these fields. Kept because it is verified-correct and needed downstream.
+            put("B29", c.b29)
             put("cpu", c.cpu)
             put("deviceToken", "")
             put("hardwareInfo", c.hardwareInfo)

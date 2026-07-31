@@ -80,6 +80,47 @@ XuperApiClient.kt:600  val isBlocked = msg.contains("portal200001")
 **Fix = a wire diff: capture the real app's exact accepted portalCore request, diff against ours, patch
 the differing field(s).** The question is only HOW to see the real request. Three routes below.
 
+## Session 28 — DEX carved + full request pipeline reverse-engineered (route 1 SUCCEEDED)
+The `.4` live DEX dump worked and **bypassed the emulation wall entirely**. Carved 3 decrypted
+dex from `com.android.mgstv` process memory (`dex\n035` at large `[anon:dalvik-DEX data]` r-- regions;
+`dd /proc/<pid>/mem`, then recompute adler32+sha1 so jadx accepts them). Decompiled with jadx.
+**The whole portalCore request pipeline is now known from the app's own code:**
+- **Retrofit iface `jd.a`** — every endpoint (`v9/getAuthInfo`, `v15/getSlbInfo`, `v6/getLiveData`,
+  `v4/startPlayLive`, `v3/snToken`, …) as `@o("{agreement}://{ip}/api/portalCore/…")` with `@a` body.
+  Header flags `needEncrypt:false` / `ProcessResult:false` are consumed by interceptors.
+- **Interceptor `ld.a`** (runs 1st) adds exactly 4 HTTP headers: `Content-Type`,
+  `apk`=appId, `apkVer`=appVersion, `spkgVer`=sysVersion. **No signature/nonce/timestamp header** (confirmed via full instruction dump).
+- **Interceptor `ld.b`** (runs 2nd) parses the JSON body, **merges 15 common device fields into it**,
+  then 3DES-encrypts (`rd.c.c`, our `XuperCrypto` is correct). The merged keys (verbatim from `ld.b.a()`):
+  `loginType, appLanguage, apkVersion, sysVersion, appId, hardwareInfo, model, product, cpu, `**`B29`**`,
+  reserve1, portalCode, deviceToken, sn, sdkVer`. Per-call bean fields (e.g. `GetAuthInfoBean{lang,
+  portalCode, type, userId, userToken}`) are the rest of the body.
+- **Values ground-truthed from the dex/device:** `appId="com.android.msandroid"` (dex string table),
+  `apkVer`=versionCode `43405` (dumpsys + `version.xml key_current_version=43405`),
+  `sysVersion` = `format(Build.TIME,"yyyy-MM-dd HH:mm:ss",Asia/Shanghai)+"_"+SDK_INT+"_"+RELEASE+"_"+kernel`
+  (`r2.b.l()`) — matches our stored `"2024-11-15 19:08:51_29_14.1_4.9.170"`.
+
+**Two real wire diffs found & patched in `XuperApiClient.envelope()`:** our body sent lowercase
+`b29` (real app = **`B29`** uppercase) and an extra `contentType` field (real app puts it only in a
+header). After the fix our body field-set is byte-identical to the real app's.
+
+**BUT — portal200001 is NOT a request-field diff (proven).** Replayed a wire-exact `getAuthInfo`
+(3DES-encrypted, correct headers, `B29`, correct appId/apkVer/spkgVer) from Win11 to the SAME live
+hosts the running app contacts (`sxowvd.jzvqwcyor.com`, `emowvv.dqiswip4.xyz`) over both http and https:
+still `{"returnCode":"portal200001","errorMessage":"版本已停止使用"}` ("this version is discontinued").
+`B29` vs `b29` made no difference. Since every observable request component now matches the decompiled
+ground truth, **the version-gate is enforced ABOVE the request body** — most likely (a) the pinned
+**client-TLS identity / mutual-TLS** the app presents (`rd.h` sslSocketFactory + pinned trust; plain
+python/okhttp fingerprint gets a canned version-reject), and/or (b) the **real portal host pool is
+resolved at runtime from DES-decrypted `b3.a` DomainInfo**, not the plugin's stale hardcoded
+`PORTAL_BOOTSTRAP_HOSTS` — those hosts may be legacy endpoints that always answer portal200001.
+
+**Next-blocker shift:** the fix is no longer "diff one body field". It is (1) recover the *current*
+portal host pool (read `b3.a` domain fields from live memory, or decrypt its DES config source), and/or
+(2) match the app's TLS client identity. Artifacts on this box: carved dex + full jadx output in the
+scratchpad (`app_classes.dex`, `d2_classes.dex`, `jadx_out/`, `jadx_d2/`); `_scratch` is Goal-1-owned so
+these were NOT committed there.
+
 ## Routes to the wire diff — ranked cheapest first
 1. **Live memory / DEX dump from `.4` (rooted, ADB) — RECOMMENDED, sidesteps the emulation wall.**
    The real app runs and streams on `.4`, so ijiami decrypts the app DEX **into process memory** at
