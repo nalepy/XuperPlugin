@@ -4,6 +4,10 @@
 > `GOAL2.md` (own IPTV APK) at once. Everything needed is here; deeper detail in `ARCHITECTURE.md`,
 > `GOAL1.md`, `GOAL2.md`. These three GOAL*.md files are the canonical working docs.
 
+> **STATUS: ✅ ACHIEVED (session 28).** The decrypted DEX was carved from `.4` live memory and
+> decompiled with jadx — the emulation wall was bypassed. This goal is essentially DONE; what remains is
+> *using* the DEX (see the extraction results below, and `GOAL1.md` / `GOAL2.md`).
+
 ## Objective
 Recover the **decrypted application DEX** (`classes.dex`, possibly multidex) of XTV
 (`com.android.mgstv` v4.34.5, ijiami-packed). The real app code is encrypted inside
@@ -40,12 +44,20 @@ once, unlock both.**
 - Multidex: there may be several DEX blobs — carve **every** `dex\n0` hit, not just the first.
 - Sanity-check with `baksmali`/`jadx` — it should decompile to real class names (not garbage).
 
-## Current state
-- **Route 1 (`.4` live-memory carve) is IN PROGRESS** — a subagent is running it now. Result pending;
-  do not assume the outcome until it reports.
-- **Route 2 (emulation)** is paused at a clean checkpoint. Session 28 passed the phase-2 struct-walk
-  (`P2+0x24`/`P2+0x38` sub-object fix), N.l advanced ~17ms→~50ms, still not `true`. See `GOAL1.md`.
-- No decrypted DEX in hand yet.
+## Current state — *** ACHIEVED (session 28): DEX CARVED via route 1 ***
+- **Route 1 (`.4` live-memory carve) SUCCEEDED.** The decrypted DEX was carved from
+  `com.android.mgstv` process memory on `.4` and decompiled with jadx. This **bypassed the emulation
+  wall entirely** — no `N.l→true` needed.
+  - Method that worked: `dd /proc/<pid>/mem` over the large `[anon:dalvik-DEX data]` r-- regions (found
+    via the maps), grep `dex\n035`. Memory-dumped DEX have a **stale adler32** — jadx loads 0 classes
+    until you **recompute the adler32 checksum + SHA-1 signature** in the header; after that it
+    decompiles cleanly. Carved **3 dex** (main ~9.07 MB + a 12.1 MB multidex holding `p2`/`r2`).
+  - **Raw carved regions are in the repo:** `_session/dexdata_ca849000.bin` (8 MB),
+    `_session/dexdata_full_c9f0c000.bin` (22.6 MB), maps `_session/mgstv_maps_11947.txt`. The clean
+    checksum-fixed DEX + jadx output live in the session scratchpad — **re-derive from the `.bin`s**
+    (carve at the `dex\n035` offset, fix adler32/sha1, `jadx -d out`) if you need them fresh.
+- **Route 2 (emulation)** is no longer required to obtain the DEX — demoted to fallback. It's paused at
+  a clean checkpoint (session 28 passed the phase-2 struct-walk; N.l still not `true`). See `GOAL1.md`.
 
 ## Once the DEX is in hand — extraction plan (run BOTH; this is the payoff)
 Decompile first: `jadx -d out app_decrypted.dex` (or `baksmali d` for smali). Then:
@@ -59,15 +71,22 @@ Decompile first: `jadx -d out app_decrypted.dex` (or `baksmali d` for smali). Th
 - Note: shipping requires **repack under ijiami** (resists it) or a **custom loader** — see `GOAL1.md`
   blocker 2. The DEX is necessary but not sufficient for Goal 1's final deliverable.
 
-### Goal 2 targets — the portalCore request signing (beats `portal200001`)
-- Search for: `portalCore`, `getAuthInfo`, `snToken`, `masnew` (the `portalCode`), `getSlbInfo`,
-  `login`; and the fields `apkVersion`, `sysVersion`, `sign`, `signature`, `timestamp`, `nonce`.
-- Extract the EXACT accepted request envelope: which version string it sends, whether it computes a
-  `sign`/HMAC over the body, the full header/field set, and whether it calls the native
-  `SE.sd (String→String)` @ `0x1203fc3d` for string-decrypt/signing (from the RegisterNatives dump).
-- **Diff against `app/src/main/java/com/xuper/plugin/XuperApiClient.kt`** (our request builder) and
-  patch the differing field(s). 3DES body crypto is already correct (key `2b494e53…` in
-  `XuperCrypto.kt`); the gap is a value/signature, which the DEX shows. This finishes Goal 2.
+### Goal 2 targets — DONE (session 28): pipeline found, blocker MOVED (see `GOAL2.md`)
+The DEX revealed the whole portalCore request pipeline from the app's own code:
+- Retrofit `jd.a`; interceptor `ld.a` adds 4 headers (`apk`=appId, `apkVer`, `spkgVer`, `Content-Type`)
+  with **NO signature/nonce/timestamp**; interceptor `ld.b` merges 15 body fields (incl. `B29`
+  uppercase) then 3DES-encrypts. Ground-truthed `appId="com.android.msandroid"`, `apkVer=43405`.
+- Two wire diffs patched in `XuperApiClient.envelope()` (`b29`→`B29`, dropped stray `contentType`
+  body field) → our body is now byte-identical to the real app's.
+- **CRITICAL — `portal200001` is NOT a body-field diff (proven).** A wire-exact replay to the live
+  hosts still returned `portal200001` / "版本已停止使用" (version discontinued). So the gate is enforced
+  **above the request body:** most likely (a) the app's pinned client-TLS identity (`rd.h`
+  sslSocketFactory — a plain TLS fingerprint gets a canned version-reject), and/or (b) the CURRENT
+  portal host pool is DES-decrypted at runtime from `b3.a` DomainInfo, and the plugin's hardcoded
+  `PORTAL_BOOTSTRAP_HOSTS` are **legacy** endpoints that always answer `portal200001`.
+- **Goal 2's next blocker** (in `GOAL2.md`): recover the current host pool (read `b3.a` resolved domains
+  from live memory / the `_session/heap_domain.txt` + `heap_portal.txt` dumps, or decrypt its DES
+  config) and/or match the app's TLS client identity. 3DES body crypto is already correct.
 
 ## Kill-criterion
 Route 1 (`.4` carve) should take one focused session to know if the DEX is recoverable from memory.

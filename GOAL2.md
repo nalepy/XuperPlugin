@@ -10,13 +10,21 @@ Ship **our own** IPTV app/plugin (XuperPlugin) that uses **XTV's backend** to st
 turning XTV (`com.android.mgstv`) into an open **M3U/HLS source** playable in VLC / TiviMate / Kodi, with
 **no email registration, no VIP paywall, no forced updates**, all from our own APK.
 
-## Honest verdict (read first)
-**This is the REACHABLE goal and it is ~90% built.** The full plugin exists and works up to one specific
-server-side rejection (`portal200001`). The remaining work is a **wire diff** — learn exactly how the real
-app signs its portalCore auth request, and patch the one differing field in our client. **The cheapest way
-to get that is NOT the unidbg emulation** (which is stuck on the hard `N.l→true` wall — see `GOAL1.md`).
-The cheapest way is to **read the app's own request-building code from a live memory dump on the rooted
-`.4` box, or to cert-unpin and capture one real request off the wire.** Prioritize those over emulation.
+## Honest verdict (read first) — UPDATED session 28
+**Still reachable, ~90% built, but the blocker MOVED.** The decrypted DEX was carved from `.4` (see
+`GOAL0.md`) and the full portalCore request pipeline is now known from the app's own code. Our request
+body is now **byte-identical to the real app's** (fixed `b29`→`B29`, dropped a stray `contentType` field).
+**But `portal200001` is NOT a body diff — proven** by a wire-exact replay that still got rejected
+("版本已停止使用" / version discontinued). So the version-gate is enforced **above the request body**:
+- (a) the app's **pinned client-TLS identity** (`rd.h` sslSocketFactory) — a plain TLS fingerprint gets a
+  canned version-reject, and/or
+- (b) the **current portal host pool** is DES-decrypted at runtime from `b3.a` DomainInfo, so the plugin's
+  hardcoded `PORTAL_BOOTSTRAP_HOSTS` are likely **legacy** endpoints that always answer `portal200001`.
+
+Remaining work = **(1) recover the current host pool** (read `b3.a` domains from live memory / the
+`_session/heap_domain.txt`+`heap_portal.txt` dumps, or decrypt its DES config) and **(2) match the app's
+TLS client identity.** Harder than "one field," but well-scoped. See the Session-28 section for details.
+Emulation stays the hard fallback (`GOAL1.md`); do NOT start there.
 
 ## How the stream actually works (fully reverse-engineered)
 ```

@@ -15,6 +15,22 @@ posture: treat Goal 1 as secondary. If you want live streams on your own terms s
 (own-APK using XTV's backend) is the far more reachable path** and shares most of the same intel.
 Pursue Goal 1 only if the deliverable specifically must be "the original XTV app, unlocked."
 
+## *** PIVOT (session 28): the decrypted DEX is now IN HAND — the emulation grind is no longer required to get it ***
+The `.4` live-memory carve (see `GOAL0.md`) **succeeded** — the decrypted app DEX was pulled from process
+memory and decompiled with jadx, bypassing the whole `N.l→true` wall. The entire emulation effort below
+existed ONLY to produce this DEX via `b2b`; **that is now moot for obtaining the code.** Goal 1's fastest
+path is now:
+1. Decompile the carved DEX (raw regions in `_session/dexdata_ca849000.bin` + `_session/dexdata_full_c9f0c000.bin`;
+   fix adler32/sha1, `jadx -d out` — see `GOAL0.md` for the exact carve steps).
+2. Search the decompiled source for the **email-registration / forced-update / payment-VIP gate checks**
+   and map the minimal patches (force the unlocked branch). Targets listed in `GOAL0.md` "Goal 1 targets".
+3. Then tackle the REAL remaining wall for Goal 1: **re-locking** — repack under ijiami (resists it) or
+   ship a custom loader (see Blocker 2 below). The DEX is necessary but not sufficient for the final
+   "unlocked XTV app" deliverable.
+
+The emulation sections below are retained as reference / fallback (and the session-28 struct-walk fix is
+still valid progress), but **do not spend tokens driving `N.l→true` just to get the DEX — you already have it.**
+
 ## Current state
 - XTV is **ijiami-packed**: the real Java/Kotlin code (`classes.dex`) is encrypted inside
   `assets/ijiami.dat` and decrypted at runtime by the native lib `assets/ijm_lib/armeabi/libexec.so`
