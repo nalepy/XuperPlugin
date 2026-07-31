@@ -2394,17 +2394,24 @@ public class Unpack extends AbstractJni {
                     // VTABLE_STUB2, and point P2+0x38 at it. Fill ALL offsets with STUB2 pointers
                     // so any sub-offset read (packer reads +0x1c AND +0x38 from it) returns a
                     // valid function pointer.
-                    // p27x: THIS EXPERIMENT IS DISABLED — it replaced the crash with a worse one
-                    // (blx to our data struct as ARM code -> garbage SVC). The packer's chain
-                    // r0=[*sl]; r1=[r0+0x24]; r4=[r1+0x38] walks REAL C++-style objects, and any
-                    // fake pointer we inject breaks the next read. Keep P2+0x38 at its original
-                    // VTABLE_STUB value and accept the crash for now.
-                    final long P2_38_STRUCT = SCRATCH + 0x900;
+                    // p28: session-27 disasm of 0x1203a8fe proves the access is a DOUBLE deref
+                    // (a C++ virtual call): `ldr r0,[P2+0x38]; ldr r0,[r0+0x1c]; blx r0`. And the
+                    // P2+0x24 access at 0x1203a91c-0x1203a944 is the same shape (`ldr r3,[P2+0x24];
+                    // ldr r4,[r3,#0x1c] or [r3,#0x38]; blx r4`). Session 27 kept P2+0x38 as a raw
+                    // code addr (VTABLE_STUB) — a single value, which cannot satisfy a double deref
+                    // (its +0x1c reads code bytes = 0 -> blx 0). Fix: make P2+0x24 and P2+0x38 point
+                    // to a real SUB-OBJECT whose +0x1c and +0x38 slots hold the callable stub. Fill
+                    // the whole sub-object page with the stub pointer so any offset read is callable.
+                    final long P2_SUBOBJ = SCRATCH + 0x900; // 0x7f000900 (data struct, EVEN addr)
                     try {
-                        backend.mem_write(0x120868f0L + 0x38, le32(VTABLE_STUB | 1L));
-                        System.out.println(">>> [p27x] P2+0x38 kept at VTABLE_STUB (p27o disabled)");
+                        for (int off = 0; off < 0x100; off += 4)
+                            backend.mem_write(P2_SUBOBJ + off, le32(VTABLE_STUB | 1L)); // every slot -> callable stub
+                        backend.mem_write(0x120868f0L + 0x38, le32(P2_SUBOBJ)); // P2+0x38 -> sub-object
+                        backend.mem_write(0x120868f0L + 0x24, le32(P2_SUBOBJ)); // P2+0x24 -> sub-object
+                        System.out.println(">>> [p28] P2+0x24 & P2+0x38 -> sub-object 0x" + Long.toHexString(P2_SUBOBJ)
+                            + " (all slots = VTABLE_STUB; matches the double-deref virtual call)");
                     } catch (Throwable t) {
-                        System.out.println(">>> [p27x] P2+0x38 reset FAILED: " + t);
+                        System.out.println(">>> [p28] P2 sub-object setup FAILED: " + t);
                     }
                     System.out.println(">>> [p27e] phase-2 dispatch diagnostics installed");
                 } catch (Throwable t) {

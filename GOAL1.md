@@ -120,6 +120,27 @@ Pursue Goal 1 only if the deliverable specifically must be "the original XTV app
     requires either reconstructing the real object graph at `0x121b1ec0`, or making the FindClass/class-table
     mocks produce a real DVM-shaped context.
 
+- **Session 28 — phase-2 struct-walk PASSED (`P2+0x24`/`P2+0x38` sub-object fix):**
+  - Disassembled `0x1203a8ac` (the phase-2 function that was crashing). Its dispatch at `0x1203a8fe`
+    is a **C++ virtual call, a DOUBLE deref**: `ldr r0,[r1,#0x38]` (r1=P2) → sub-object pointer;
+    `ldr r0,[r0,#0x1c]` → fn pointer; `blx r0`. The `P2+0x24` access at `0x1203a91c-0x1203a944` is the
+    same shape (`ldr r3,[P2+0x24]; ldr r4,[r3,#0x1c] or [r3,#0x38]; blx r4`).
+  - Root cause of session-27's failure: `P2+0x38` was kept as a **raw code addr** (`VTABLE_STUB`), a
+    single value — which cannot satisfy a double deref (`[stub+0x1c]` reads code bytes = 0 → `blx 0`).
+  - **Fix (p28, in `_scratch/Unpack.java`):** allocate a sub-object page `P2_SUBOBJ = 0x7f000900`, fill
+    every 4-byte slot with the callable stub pointer (`VTABLE_STUB|1 = 0x7f000801`), then set
+    `P2+0x38 → P2_SUBOBJ` and `P2+0x24 → P2_SUBOBJ`. Verified live: `[P2+0x38]=0x7f000900`,
+    `[*(P2+0x38)+0x1c]=0x7f000801` → `blx` now lands on the stub, not `blx 0`. **The `0x1203a8ac`
+    struct-walk is passed.**
+  - **New state:** N.l advances deeper into phase 2 — crash moved from ~17 ms to **~50 ms**. It still
+    ends in a nested `Function32` re-entry at `0x120381c1`, but from a NEW site **past `0x1203a900`**
+    (beyond the current p27 diagnostics, which stop at `0x1203a8fe`). `b2b` stub at `0x12039458` still
+    unpatched → `N.l` still returns false/throws. This is the same whack-a-mole class, advancing one
+    C++ field at a time.
+  - **Next diag needed:** instrument N.l's phase-2 execution PAST `0x1203a900` (add hooks along
+    `0x1203a904→0x1203ab18` and the `0x120375fc` / `blx r4` at `0x1203a944`) to find what dispatches
+    the new `0x120381c1` re-entry, then apply the same "point-to-a-real-sub-object" fix to that field.
+
 ## Accomplishments
 - Full map of the packer's runtime structure (entry `0x120381c0`, callee graph, the `s/h/e/l/l/N` API).
 - Emulation harness that boots `libexec.so`, survives anti-tamper + scan loops, and **runs `N.l` to
