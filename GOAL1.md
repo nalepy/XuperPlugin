@@ -21,10 +21,9 @@ The `.4` live-memory carve (see `GOAL0.md`) **succeeded** — the decrypted app 
 memory and decompiled with jadx, bypassing the whole `N.l→true` wall. The entire emulation effort below
 existed ONLY to produce this DEX via `b2b`; **that is now moot for obtaining the code.** Goal 1's fastest
 path is now:
-1. **Re-carve the DEX from `.4`** (the session-28 carve worked but its artifacts were NOT persisted —
-   they were cleaned from the scratchpad; see `GOAL0.md`). The method is proven/reproducible:
-   `dd /proc/<pid>/mem` over the `[anon:dalvik-DEX data]` regions, grep `dex\n035`, fix adler32/sha1,
-   `jadx -d out`. Save it somewhere durable this time.
+1. Decompile the **committed** carved DEX — it's persisted at `_session/xtv_dex/app_classes_fixed.dex`
+   (+ `d2_classes.dex`): `jadx -d out _session/xtv_dex/app_classes_fixed.dex`. (Re-carve from `.4` only
+   if you need a fresher build; steps in `_session/xtv_dex/README.md`.)
 2. Search the decompiled source for the **email-registration / forced-update / payment-VIP gate checks**
    and map the minimal patches (force the unlocked branch). Targets listed in `GOAL0.md` "Goal 1 targets".
 3. Then tackle the REAL remaining wall for Goal 1: **re-locking** — repack under ijiami (resists it) or

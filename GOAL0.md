@@ -52,15 +52,11 @@ once, unlock both.**
     via the maps), grep `dex\n035`. Memory-dumped DEX have a **stale adler32** — jadx loads 0 classes
     until you **recompute the adler32 checksum + SHA-1 signature** in the header; after that it
     decompiles cleanly. Carved **3 dex** (main ~9.07 MB + a 12.1 MB multidex holding `p2`/`r2`).
-  - **⚠️ The carved artifacts were NOT persisted.** The raw regions (`dexdata_ca849000.bin` ~8 MB,
-    `dexdata_full_c9f0c000.bin` ~22.6 MB, maps `mgstv_maps_11947.txt`) and the checksum-fixed DEX +
-    jadx output lived in the subagent's session scratchpad and were cleaned on completion — they are
-    **gone from disk.** The *knowledge* extracted from the DEX is preserved (see `GOAL2.md` session-28
-    for the full portalCore pipeline; the `XuperApiClient.kt` `B29` fix is committed). But to do the
-    **Goal-1 gate-check search you must RE-CARVE the DEX from `.4`** — the method is proven and
-    reproducible: `dd /proc/<pid>/mem` over the `[anon:dalvik-DEX data]` regions, grep `dex\n035`,
-    carve `header.file_size` bytes, recompute adler32+sha1, `jadx -d out`. Consider saving the carved
-    DEX somewhere durable (or committing it) next time so it survives.
+  - **✅ The carved DEX is PERSISTED in the repo:** `_session/xtv_dex/` —
+    `app_classes_fixed.dex` (~9 MB, checksum-fixed, jadx-ready), `d2_classes.dex` (~12 MB multidex),
+    `dex_strings.txt`, `validate.py` (the checksum-fix script), `portal.pcap`, `maps3.txt`, and a
+    `README.md` with provenance + carve steps. The 59 MB jadx-decompiled source was NOT committed
+    (derivable) — regenerate with `jadx -d out _session/xtv_dex/app_classes_fixed.dex`.
 - **Route 2 (emulation)** is no longer required to obtain the DEX — demoted to fallback. It's paused at
   a clean checkpoint (session 28 passed the phase-2 struct-walk; N.l still not `true`). See `GOAL1.md`.
 
