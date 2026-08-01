@@ -37,3 +37,11 @@ report. Boxes are rooted, so almost everything is scriptable via adb.
 ## Golden rule
 If you'd be tempted to "wait for the user to accept" — STOP that thought. Script it, or write NEEDS.md and
 exit. The loop is: automate → if truly blocked on a secret, NEEDS.md + stop. Never hang.
+
+## Connectivity (Tailscale — boxes reachable from anywhere)
+The boxes are on a home LAN reached from any location via a Tailscale **subnet router** on `.40`
+(`xtv40-subnet`, routes `192.168.100.0/24` + `192.168.3.0/24` approved). **adb uses the SAME IPs**
+(`adb connect 192.168.100.4|8|97:5555`) whether the orchestrator host is on-LAN or roaming — no address
+changes. Off-LAN the latency is higher (fine for control, slow for big memory dumps). If adb flaps after
+a network change, retry `adb disconnect <ip>:5555 && adb connect <ip>:5555`. `.40` + the boxes must stay
+powered at home (a TV HDMI-CEC auto-off will sleep an HDMI-connected box — keep boxes unplugged from TVs).

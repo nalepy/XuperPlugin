@@ -39,3 +39,7 @@ Assign each device task to a specific box in its spec to avoid adb/foreground co
   family, Bangcle-packed, NOT Ranger-gated on portal), `youcine-assess` (VOD-only, ijiami, dropped).
 - IN FLIGHT: `telelatino-deepdive` (.4 — is the not-Ranger gate beatable? ← key), `xtv-native-capture`
   (.8 — lift the native connection identity), `unitv-patch-assess` (.97 — patch+repack non-ijiami UniTV).
+
+## Connectivity / off-LAN
+Boxes are reachable from anywhere via a Tailscale subnet router on `.40` (`xtv40-subnet`) — adb uses the
+normal `192.168.100.x:5555` IPs whether on-LAN or roaming. Full detail + the resource pool: `RESOURCES.md`.
