@@ -1,0 +1,81 @@
+{
+  "captured_at": "2026-08-01T12:38-13:06 (box 192.168.100.8, com.android.mgstv 43405, NOT logged in)",
+  "method": "native-heap capture (process_vm_readv) of the app's in-memory DoHttpSec log",
+  "requests": [
+    {
+      "session": "NNRVnOZ6Oquw",
+      "service_name": "portal",
+      "method": "POST",
+      "url": "/api/portalCore/getEmailSuffix",
+      "headers": "Content-type: application/json;charset=utf-8\r\napk: com.android.msandroid\r\napkVer: 43405\r\nspkgVer: 2018-09-18 11:30:06_25_7.1.2_3.14.29\r\nCache-Control: no-store\r\n",
+      "body": "{\"apkVersion\":\"43405\",\"appId\":\"com.android.msandroid\",\"appLanguage\":\"en\",\"b29\":\"4435652b4d4641546c6963733953743863376b75424f474c576b5a6d41326e6474724e534b567937426a6e4c556e72384136647252773d3d\",\"contentType\":\"application/json;charset=utf-8\",\"cpu\":\"armeabi-v7a\",\"deviceToken\":\"\",\"hardwareInfo\":\"amlogic\",\"loginType\":\"2\",\"model\":\"SM-G973F\",\"portalCode\":\"\",\"product\":\"Galaxy S10\",\"reserve1\":\"76356c476568424f4a38334761645a697957757344673d3d\",\"sdkVer\":25,\"sn\":\"1ecb8d3244c6460059e85db8f0d47fbb\",\"sysVersion\":\"2018-09-18 11:30:06_25_7.1.2_3.14.29\"}",
+      "timeout": 60000,
+      "data": "{\"tdc\":false}"
+    },
+    {
+      "session": "NNRVnOZ6Oquw",
+      "service_name": "portal",
+      "method": "POST",
+      "url": "/api/portalCore/config/get",
+      "headers": "Content-type: application/json;charset=utf-8\r\napk: com.android.msandroid\r\napkVer: 43405\r\nspkgVer: 2018-09-18 11:30:06_25_7.1.2_3.14.29\r\nCache-Control: no-store\r\n",
+      "body": "{\"apkVersion\":\"43405\",\"appId\":\"com.android.msandroid\",\"appLanguage\":\"en\",\"b29\":\"4435652b4d4641546c6963733953743863376b75424f474c576b5a6d41326e6474724e534b567937426a6e4c556e72384136647252773d3d\",\"contentType\":\"application/json;charset=utf-8\",\"cpu\":\"armeabi-v7a\",\"deviceToken\":\"\",\"hardwareInfo\":\"amlogic\",\"loginType\":\"2\",\"model\":\"SM-G973F\",\"portalCode\":\"\",\"product\":\"Galaxy S10\",\"reserve1\":\"76356c476568424f4a38334761645a697957757344673d3d\",\"sdkVer\":25,\"sn\":\"1ecb8d3244c6460059e85db8f0d47fbb\",\"sysVersion\":\"2018-09-18 11:30:06_25_7.1.2_3.14.29\",\"groupName\":\"com.android.msandroid\",\"moduleName\":\"ApkConfig\"}",
+      "timeout": 60000,
+      "data": "{\"tdc\":false}"
+    },
+    {
+      "session": "NfZuaPkgmixz",
+      "service_name": "portal",
+      "method": "POST",
+      "url": "/api/portalCore/v8/active",
+      "headers": "Content-type: application/json;charset=utf-8\r\napk: com.android.msandroid\r\napkVer: 43405\r\nspkgVer: 2018-09-18 11:30:06_25_7.1.2_3.14.29\r\n",
+      "body": "{\"apkVersion\":\"43405\",\"appId\":\"com.android.msandroid\",\"appLanguage\":\"en\",\"b29\":\"4435652b4d4641546c6963733953743863376b75424f474c576b5a6d41326e6474724e534b567937426a6e4c556e72384136647252773d3d\",\"contentType\":\"application/json;charset=utf-8\",\"cpu\":\"armeabi-v7a\",\"deviceToken\":\"\",\"hardwareInfo\":\"amlogic\",\"loginType\":\"2\",\"model\":\"SM-G973F\",\"portalCode\":\"\",\"product\":\"Galaxy S10\",\"reserve1\":\"76356c476568424f4a38334761645a697957757344673d3d\",\"sdkVer\":25,\"sn\":\"1ecb8d3244c6460059e85db8f0d47fbb\",\"sysVersion\":\"2018-09-18 11:30:06_25_7.1.2_3.14.29\",\"authCode\":\"\",\"authVersion\":\"\",\"channel\":\"default\",\"macAddr\":\"06:41:80:91:CD:6E\",\"matadata\":\"\",\"openNum\":15,\"signdata\":\"\",\"snToken\":\"\"}",
+      "timeout": 60000,
+      "data": "{\"tdc\":false}"
+    },
+    {
+      "session": "NfZuaPkgmixz",
+      "service_name": "dcs",
+      "method": "POST",
+      "url": "/v1/googleadmob/log_event",
+      "headers": "Content-type: application/json;charset=utf-8\r\nETag: fe47c34a3a5abaa08130b08dd8ee6bc5\r\n",
+      "body": "{\"s\":{\"apk\":\"com.android.msandroid\",\"apk_ver\":\"43405\",\"approve_code\":\"\",\"auth_version\":\"\",\"code\":\"\",\"entry_type\":\"all\",\"reserve1\":\"76356c476568424f4a38334761645a697957757344673d3d\",\"sn\":\"1ecb8d3244c6460059e85db8f0d47fbb\",\"spkg_ver\":\"7.1.2\",\"type\":1,\"user_id\":\"\",\"user_identity\":\"\"},\"status\":0}",
+      "timeout": 60000,
+      "data": "{\"tdc\":false}"
+    }
+  ],
+  "responses": [
+    {
+      "for": "getEmailSuffix",
+      "returnCode": "0",
+      "errorMessage": "成功",
+      "data": {"emailSuffixStr": "@gmail.com,@gmail.com.br,@hotmail.com,@hotmail.com.br,@outlook.com,@outlook.com.br,@live.com,@uol.com.br,@bol.com.br,@yahoo.com,@yahoo.com.br,@ymail.com,@globomail.com,@msn.com,@aol.com,@live.cl,@hotmail.cl,@outlook.es,@outlook.com.mx,@outlook.com.ar,@outlook.com.pe,@outlook.com.co,@outlook.cl,@hotmail.br,@hotmail.es,@hotmail.com.mx,@hotmail.com.ar,@hotmail.com.pe,@hotmail.com.co,@yahoo.es,@yahoo.com.mx,@yahoo.com.ar,@yahoo.com.pe,@yahoo.com.co,@yahoo.cl,@live.com.cl,@live.com.ar,@live.com.mx"},
+      "dohttpsec_wrapper": {"err": "0", "data": "{\"tdc\":false}", "headers_note": "cf-cache-status: DYNAMIC, content-type: application/json, cf-ray present"}
+    },
+    {
+      "for": "a login/auth call",
+      "returnCode": "aaa100082",
+      "errorMessage": "三方账号已经设置密码，只是使用登录方式",
+      "dohttpsec_wrapper": {"err": "0", "data": "{\"tdc\":false}", "headers": "alt-svc: h3=\":443\"; ma=86400\r\ncf-cache-status: DYNAMIC\r\ncf-ray: a245f4acfb5c5ef6-ASU\r\ncontent-length: 150\r\ncontent-type: application/json"}
+    }
+  ],
+  "tokens": {
+    "sn": "1ecb8d3244c6460059e85db8f0d47fbb",
+    "b29_hex_b64": "4435652b4d4641546c6963733953743863376b75424f474c576b5a6d41326e6474724e534b567937426a6e4c556e72384136647252773d3d",
+    "b29_decoded_40B": "0f97be30501396272cf52b7c73b92e04e18b5a46660369ddb6b352295cbb0639cb527afc03a76b47",
+    "reserve1_hex_b64": "76356c476568424f4a38334761645a697957757344673d3d",
+    "reserve1_decoded_16B": "bf99467a104e27cdc669d662c96bac0e",
+    "notes": "b29/reserve1/sn byte-identical across two app launches. reserve1 identical to box .4's (session 30). b29's last 8 bytes identical to .4's. portalCode EMPTY (clone used masnew).",
+    "portal_hosts_seen": ["Dqukhjel.b0z9135v.com (172.67.132.14)", "rnsm.prxmnvhcy.com", "eskna.ucpjdhivl.com (tdc)", "ioermd.l7hsgo8g.com"],
+    "host_rotation": "captured portal vhosts are NXDOMAIN publicly shortly after capture (operator rotates/takedown); the app keeps working via cached IPs."
+  },
+  "replay_results": [
+    {"transport": "plain TLS", "endpoint": "getEmailSuffix", "hosts": "espjey/sxowvd/yrqucu/ioermd", "result": "portal200001"},
+    {"transport": "plain TLS", "endpoint": "v8/active", "hosts": "espjey", "result": "portal200001"},
+    {"transport": "exact app TLS (0xcca9)+h2", "endpoint": "getEmailSuffix", "hosts": "espjey", "headers": "mixed-case + Cache-Control", "result": "portal200001"},
+    {"transport": "exact app TLS+h2", "endpoint": "getEmailSuffix", "hosts": "espjey", "headers": "lowercase, no Cache-Control", "result": "portal200001"},
+    {"transport": "exact app TLS+h2", "endpoint": "v8/active", "hosts": "espjey", "result": "portal200001"},
+    {"transport": "exact app TLS+raw h2", "endpoint": "getEmailSuffix", "result": "GOAWAY"},
+    {"control": "the app's own identical request at the same time", "result": "returnCode:\"0\" ACCEPTED"}
+  ],
+  "verdict": "NATIVE-ONLY — the gate is the native Titan-Ranger DoHttpSec CONNECTION identity. Not replayable off-device. No returnCode:0 achieved off-device."
+}
