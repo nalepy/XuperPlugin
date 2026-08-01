@@ -1,5 +1,7 @@
 # Worker task: TeleLatino deep-dive — is its portal gate BEATABLE off-device?
 
+> **MANDATORY (device): follow `orchestrator/DEVICE-GUIDE.md` — install with `-g`, auto-grant perms via pm grant/appops, uiautomator-tap stray dialogs, NEVER wait for a human, NEVER accept in-app updates; if a secret/account is truly required write NEEDS.md and stop.**
+
 Branch `telelatino-deepdive` off `master`, isolated worktree. Commit small, push, open a PR. Do NOT touch
 `master`. Read `GOAL.md` + the `telelatino-assess` branch's `backends/telelatino/ASSESSMENT.md` first
 (key finding: **TeleLatino's portal flow is NOT Ranger-DoHttpSec-gated**, unlike XTV/koocan — so its

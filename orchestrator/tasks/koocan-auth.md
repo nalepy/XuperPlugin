@@ -1,5 +1,7 @@
 # Worker task: finish the off-device koocan auth chain (Phase A)
 
+> **MANDATORY (device): follow `orchestrator/DEVICE-GUIDE.md` — install with `-g`, auto-grant perms via pm grant/appops, uiautomator-tap stray dialogs, NEVER wait for a human, NEVER accept in-app updates; if a secret/account is truly required write NEEDS.md and stop.**
+
 You are a worker agent in an isolated git worktree on branch `koocan-auth`, off `master`, in the
 XuperPlugin repo. Orchestrator coordinates via git — commit small, push your branch, do NOT touch
 `master`. Read `GOAL.md` (north star) and `GOAL2.md` "Session 33" first.

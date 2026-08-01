@@ -1,5 +1,7 @@
 # Worker task: UniTV patch+repack — a standalone free app WITHOUT off-device replication
 
+> **MANDATORY (device): follow `orchestrator/DEVICE-GUIDE.md` — install with `-g`, auto-grant perms via pm grant/appops, uiautomator-tap stray dialogs, NEVER wait for a human, NEVER accept in-app updates; if a secret/account is truly required write NEEDS.md and stop.**
+
 Branch `unitv-patch-assess` off `master`, isolated worktree. Commit small, push, open a PR. Do NOT touch
 `master`. Read `GOAL.md` + `backends/koocan/HANDOFF.md` first.
 

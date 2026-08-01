@@ -1,5 +1,7 @@
 # Worker task: capture ONE fresh ACCEPTED native portalCore request from the live XTV app
 
+> **MANDATORY (device): follow `orchestrator/DEVICE-GUIDE.md` — install with `-g`, auto-grant perms via pm grant/appops, uiautomator-tap stray dialogs, NEVER wait for a human, NEVER accept in-app updates; if a secret/account is truly required write NEEDS.md and stop.**
+
 Branch `xtv-native-capture` off `master`, isolated worktree. Commit small, push, open a PR. Do NOT touch
 `master`. Read `GOAL.md`, `GOAL2.md` (sessions 30-31), and `backends/koocan/FINDINGS.md` first.
 
