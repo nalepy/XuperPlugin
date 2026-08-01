@@ -1,7 +1,7 @@
 # TeleLatino — deep-dive findings (telelatino-deepdive-pro)
 
 Date: 2026-08-01 · Branch: `telelatino-deepdive-pro`
-Last updated: 2026-08-01 16:00 UTC (session 33b continuation)
+Last updated: 2026-08-01 19:00 UTC (session 33c — msandroid APK + live pcap analysis)
 
 ## Verdict: VERSION-GATE (beatable) — NOT identity-gate. BLOCKED by APK age.
 
@@ -200,10 +200,98 @@ The server responds with gzip-compressed JSON when `Accept-Encoding: gzip` is se
 
 6. **Account credential format unknown.** The cached password hash `62513c1dec921de3015a0b22574512f4` from .4 prefs does not match any tested pattern (raw, MD5, MD5+cloudstream, etc.). The DEX references `PBEWITHMD5ANDDES-CBC` — the password may be DES-encrypted before hashing.
 
+## Updated verdict (session 33c)
+
+**portal200001 is a server-side blanket block.** The portal hosts (`emowvv.dqiswip4.xyz`, `espjey.ysnihrwtg.com`) reject ALL versions from ALL apps in the backend family. The DCS `getAddr` still returns these hosts with `returnCode:0`, but the portal itself is retired for ALL current builds.
+
+This effectively makes TeleLatino **dead (identity-gate equivalent)** until a NEWER APK build arrives. No amount of header/body/version manipulation can bypass the server-side rejection.
+
+**What has changed since session 33:**
+- msandroid v60203 tested → also gated (NOT a version-gate unlock)
+- Free account login tested → also gated (gate is pre-auth)
+- 10 identity combinations tested → ALL rejected identically
+- App on .4 confirmed broken (same gate, empty channel list)
+
+**TeleLatino is still BEATABLE in theory** (it's a version whitelist, not a native-identity wall), but **in practice it is currently gated** until the owner provides a newer APK build.
+
 ## Next steps
 
-1. **⚡ BLOCKER: Obtain newer TeleLatino APK** (>5.46.8, versionCode >54608). This is the ONLY path to clear `portal200001`. The owner was hunting one in parallel — check status. Without a newer APK, TeleLatino is dead like XTV (gated, not beatable with current version).
+1. **⚡ BLOCKER: Obtain newer TeleLatino APK** (>5.46.8, versionCode >54608, built post-July 2026). This is the ONLY path to clear `portal200001`. The owner is hunting one. Without it, TeleLatino is blocked like XTV.
 
-2. **Memory dump for 3DES response keys** — lower priority now (needed AFTER version gate cleared). The `EventDbModel.res` encrypted field is a candidate for testing decryption once keys are obtained. Use `vmread.c` cross-compiled with `syscall(__NR_process_vm_readv,...)` or Frida hook on `encryptThreeDESECB`/`decryptThreeDESECB`.
+2. **Memory dump for 3DES response keys** — prerequisite for decrypting portalCore responses once gate is cleared. The `BBDatabase.db` EventDbModel contains encrypted responses from when the app DID work (pre-gate). Decrypting these would reveal the expected successful response format.
 
-3. **If newer APK obtained:** capture its `versionCode`/`spkgVer`, re-run `getAddr` for fresh hosts, test portalCore chain end-to-end (`snToken → active → login → getAuthInfo → getSlbInfo → getColumnContents → startPlayLive → m3u8`).
+3. **If newer APK obtained:**
+   - Capture versionCode/spkgVer, install on `.4`
+   - Run `getAddr` for fresh portal hosts (current hosts may rotate with new version)
+   - Test portalCore chain: `snToken → active → login → getAuthInfo → getSlbInfo → getColumnContents → startPlayLive`
+   - Decrypt responses with 3DES keys, extract channel list + `.m3u8` URLs
+   - Verify one stream end-to-end: fetch `.m3u8` → `.ts` segment → ffprobe
+
+4. **koocan remains the LEAD** — koocan has working DES keys, no version gate, and a semi-working portalCore (same backend family). If koocan Phase A completes before a newer TeleLatino APK arrives, port the full pipeline to TeleLatino with per-brand identity.
+
+### msandroid v6.2.3 APK (versionCode 60203)
+
+**APK analysis** (`_session/apks/Xuper_com.msandroid.mobile_v6.2.3_(60203).apk`):
+- Package: `com.msandroid.mobile`, versionCode `60203`, versionName `6.2.3`
+- Bangcle/secneo-packed: single `classes.dex` + `libDexHelper.so` + `libdexjni.so`
+- **HAS Titan Ranger** (`libranger-jni.so` 9.8MB/7.1MB) — MORE locked down than TeleLatino
+- Has Ed25519 signing (`libed25519.so`), IJK player, Chromecast support
+- Gradle plugin 8.1.0, targetSdk 33
+- AppMetrica SDK token dated `Tue Jun 10 2025` (SDK generation date, not build date)
+- Labeled "built 2026-05-14" — OLDER than TeleLatino's Jul-9 build
+- Installed on `.4` successfully, but app crashes on launch (Bangcle DEX unpacking likely fails)
+
+**portalCore test with msandroid identity**: `portal200001` — same as TeleLatino. versionCode 60203 does NOT clear the gate.
+
+### 10 portalCore identity combinations — ALL rejected
+
+| # | Package | verCode | spkgVer | UA | Result |
+|---|---------|---------|---------|----|--------|
+| 1 | `com.global.latinotv` | 54608 | 2024-11-15..._29_14.1_4.9.170 | okhttp/3.12.12 | portal200001 |
+| 2 | `com.spanish.latinotvod` | 54608 | same | 3.12.12 | portal200001 |
+| 3 | `com.msandroid.mobile` | 60203 | 2026-05-14..._29_14.1_4.9.170 | 3.12.12 | portal200001 |
+| 4 | `com.global.latinotv` | 54608 | same | okhttp/4.12.0 | portal200001 |
+| 5 | `com.global.latinotv` | 54608 | same | (none) | portal200001 |
+| 6 | `com.mobile.brasiltv` | 21408 | 2018-12-18..._5.1.1_3.14.29 | 3.12.12 | portal200001 |
+| 7 | `com.integration.unitviptv` | 21408 | same | 3.12.12 | portal200001 |
+| 8 | `com.global.latinotv` | 54608 | same + portalCode header | 3.12.12 | portal200001 |
+| 9 | `com.global.latinotv` | 54608 | same | 3.12.12 (HTTPS) | portal200001 |
+| 10| `com.global.latinotv` | 54608 | same (espjey host) | 3.12.12 | portal200001 |
+
+**Conclusion: portal200001 is a server-side blanket block.** No client-side identity bypasses it. The DCS `getAddr` returns `returnCode:0` pointing to these portal hosts, but the portal itself rejects ALL versions. The DCS is returning stale/retired portal hosts.
+
+### Live pcap analysis (`.4` box)
+
+Captured 136KB pcap from running TeleLatino app on `.4`:
+
+**Key discovery: EPG uses `com.spanish.latinotvod` package**, not `com.global.latinotv`. Verified `apk`/`apkVer`/`spkgVer` headers from pcap match our probe.
+
+**App traffic observed:**
+- `noak.trerdzu.com` — ad server (POST JSON with `apk_versioncode: 54608`)
+- `seh.utdfbgbtg.com` — notice endpoint (200 OK); DIFFERENT from earlier `nxiqj.jgrqyxupl.com` — host rotation
+- `wetc.pvqox2zhlc.com` — market/update check
+- `s23sdf56.45lc9mx79ab.com:80/v1/ws/0472e52956e45b96` — WebSocket DCS push channel
+- `tpst.twpisacnb.com:80/v1/imagine` — WebSocket imagine channel
+- `xipre.xifhzu.com` — EPG
+
+**NO portalCore or getAddr HTTP in pcap.** The app cached DCS data and didn't re-resolve. portalCore calls likely blocked/not attempted because app detected version gate from cached state.
+
+### WebSocket DCS channel
+
+Connected to `ws://s23sdf56.45lc9mx79ab.com/v1/ws/0472e52956e45b96` successfully (101 upgrade). Server sent NO data — requires client subscription/registration message first. Protocol unknown.
+
+### Box connectivity
+
+`.4` confirmed reachable at `192.168.100.4:5555` (ADB TCP). Device: V76PRO, Android 14.1, SDK 29, `su` root available. ADB daemon has stability issues on Windows (multiple stuck processes). Direct TCP reachable but ADB protocol needs RSA auth (device not in insecure mode).
+
+`_scratch/` pcaps: `tl_capture.pcap` (13.8MB, session 33), `tl_startup.pcap` (13.6MB, session 33b), `tl_cap3.pcap` (136KB, this session).
+
+### Updated account credentials
+
+| Field | Value |
+|-------|-------|
+| Email | `nestor.ale@gmail.com` |
+| Password | `Ian20jesus` |
+| Source | `orchestrator/.env` → `TELELATINO_USER`/`TELELATINO_PASS` |
+| Encrypted in prefs | `716670732f556b7476676d55496f3054382b5a695337706c69312f4f546b3371` |
+| Password hash (prefs) | `62513c1dec921de3015a0b22574512f4` (algorithm: `PBEWITHMD5ANDDES-CBC`) |
