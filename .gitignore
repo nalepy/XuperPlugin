@@ -17,3 +17,15 @@ _scratch/tlsvenv/
 _scratch/jadx_xtv_main/
 _scratch/jadx_xtv_d2/
 _scratch/**/__pycache__/
+
+# telelatino-deepdive session artifacts (pcaps, dumps, probe scratch)
+_session/*.pcap
+_session/*.txt
+_session/tl_*.bin
+_session/tl_*.hprof
+_session/bb_live.db
+_session/addb_live.db
+_session/epg_info_live.txt
+_session/tl_wire.txt
+_session/tl_cap.pcap
+_scratch/tlparse/
