@@ -1,0 +1,72 @@
+# smali patch — fake UniTV v2.14.8 (com.integration.unitviptv)
+# apply to an apktool decode:  patch -p1 < anti_tamper_smali.patch
+# (patch_unitv.sh applies the same anchors automatically and builds/signs the APK)
+# See PATCH-ASSESSMENT.md for the gate map and why each no-op is needed.
+
+diff --git a/smali_classes2/mobile/com/requestframe/util/c.smali b/smali_classes2/mobile/com/requestframe/util/c.smali
+--- a/smali_classes2/mobile/com/requestframe/util/c.smali
++++ b/smali_classes2/mobile/com/requestframe/util/c.smali
+@@ -161,6 +161,8 @@
+ 
+ .method public final a(Landroid/content/Context;Ljava/lang/String;)V
+     .locals 6
++
++    return-void
+ 
+     const-string v0, "context"
+ 
+@@ -711,6 +713,10 @@
+ 
+     invoke-static {p1, v0}, Ld/f/b/i;->b(Ljava/lang/Object;Ljava/lang/String;)V
+ 
++    const/4 v0, 0x0
++
++    return v0
++
+     invoke-virtual {p0}, Lmobile/com/requestframe/util/c;->b()Z
+ 
+     move-result v0
+@@ -756,6 +762,8 @@
+     .locals 6
+ 
+     const/4 v0, 0x0
++
++    return v0
+ 
+     :try_start_0
+     invoke-static {}, Ljava/lang/Runtime;->getRuntime()Ljava/lang/Runtime;
+@@ -1005,6 +1013,10 @@
+ 
+     invoke-static {p1, v0}, Ld/f/b/i;->b(Ljava/lang/Object;Ljava/lang/String;)V
+ 
++    const/4 v0, 0x0
++
++    return v0
++
+     :try_start_0
+     invoke-static {}, Landroid/os/Debug;->isDebuggerConnected()Z
+ 
+@@ -1067,6 +1079,10 @@
+     const-string v0, "context"
+ 
+     invoke-static {p1, v0}, Ld/f/b/i;->b(Ljava/lang/Object;Ljava/lang/String;)V
++
++    const-string v0, ""
++
++    return-object v0
+ 
+     :try_start_0
+     invoke-virtual {p1}, Landroid/content/Context;->getPackageManager()Landroid/content/pm/PackageManager;
+
+diff --git a/smali_classes2/com/mobile/brasiltv/view/HomeUpgradeDialog.smali b/smali_classes2/com/mobile/brasiltv/view/HomeUpgradeDialog.smali
+--- a/smali_classes2/com/mobile/brasiltv/view/HomeUpgradeDialog.smali
++++ b/smali_classes2/com/mobile/brasiltv/view/HomeUpgradeDialog.smali
+@@ -248,7 +248,7 @@
+ 
+     const/4 v1, 0x1
+ 
+-    if-ne v0, v1, :cond_0
++    goto :cond_0
+ 
+     invoke-static {}, Landroid/os/Process;->myPid()I
+ 

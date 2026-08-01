@@ -20,3 +20,6 @@ _scratch/YouCine.apk
 _scratch/youcine_apk/
 _scratch/**/__pycache__/
 _bench/
+
+# unitv patch work evidence (logs/pcaps/screens from the on-box verification)
+_scratch/unitv_patch/
