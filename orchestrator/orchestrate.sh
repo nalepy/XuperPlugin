@@ -64,7 +64,9 @@ cmd_dispatch(){
   local log="$RUNS/$task.log" prompt; prompt="$(cat "$tf")"
   echo "== dispatch $task -> branch=$branch cli=$AGENT_CLI model=${model:-<default>} wt=$wt ==" | tee -a "$log"
   # hard wall-clock cap (default 1h) so no worker runs forever; killed on timeout
-  ( cd "$wt" && timeout "$WORKER_TIMEOUT" agent_exec "$prompt" "$model" ) >>"$log" 2>&1 &
+  # agent_exec is a sourced shell function, not a binary — timeout can only exec a real command,
+  # so wrap it in a bash -c that re-sources the config before calling the function.
+  ( cd "$wt" && timeout "$WORKER_TIMEOUT" bash -c '. "$0"; agent_exec "$1" "$2"' "$HERE/agents.conf" "$prompt" "$model" ) >>"$log" 2>&1 &
   local pid=$!
   printf '%s\t%s\t%s\t%s\t%s\n' "$pid" "$branch" "$task" "$(date '+%Y-%m-%dT%H:%M:%S')" "$wt" >> "$REG"
   echo "dispatched: pid=$pid task=$task branch=$branch log=$log"
