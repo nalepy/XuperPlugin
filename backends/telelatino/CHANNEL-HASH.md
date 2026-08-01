@@ -1,6 +1,7 @@
 # TeleLatino — Channel name→hash mapping (live harvest)
 
-**VERDICT: MAPPING OBTAINED — 243/344 EPG channels mapped (+956 heap catalog).**
+**VERDICT: MAPPING OBTAINED — 285/344 EPG channels mapped (+956 heap catalog,
++9 live-validated, +1 end-to-end TS verified).**
 
 Date: 2026-08-01 · Branch: `telelatino-hash-live` · Device: `.4` (exclusive)
 
@@ -74,13 +75,21 @@ The heap's channel list is a SUPERSET of the EPG (956 mapped codes, including
 827 not present in the 344-EPG — regional/extra channels). All in
 `_session/channel_map_raw.json` / `_session/final_map.json`.
 
-### 4. Unmapped EPG codes (101)
+### 4. Unmapped EPG codes (59)
 
 Not present in the app's cached channel list on `.4` — the app's live list is
-a subset of the EPG (the missing ones: HBO2, C5N, GOLTV, TelefeHD, ESPN
-variants, FoxSports variants, etc. — likely not in the free tier list, or
-lazy-loaded only on scroll/play). **These are the tap-walk targets** (Phase 0
-in the task) and the accept-update+pcap targets (Phase 2). See NEEDS.md.
+a subset of the EPG (ESPN/FoxSports variants, C5N, TelefeHD, Boomerang, A24,
+MTV Live, Telemundo Internacional, etc.). Proven NOT reachable via the update
+path: the MarketServer update check returns `<ApkInfo><list rows="0"/></ApkInfo>`
+(no newer build exists to clear the version gate), and portalCore is hard-gated
+(portal200001) for every apkVer (54608/60203/99999). See NEEDS.md.
+
+### 5. Live validation + end-to-end proof
+
+- `TAP-WALK-VALIDATION.md`: 9/9 free channels tapped on the live UI, play-state
+  JSON program↔media pairs ALL match the heap map.
+- `E2E-VERIFIED.md`: Cinemax → hash → live m3u8 (through the P2P peer) → 1.16 MB
+  real HEVC .ts, ffprobe OK.
 
 ---
 
@@ -90,12 +99,20 @@ in the task) and the accept-update+pcap targets (Phase 2). See NEEDS.md.
 |---|---|
 | `backends/telelatino/channel-hash-table.csv` | the recovered mapping (EPG + heap) |
 | `backends/telelatino/extract_channel_map.py` | heap hprof → channel hash extractor |
+| `backends/telelatino/tap_walker.sh` | on-device tap→play-state-json walker |
+| `backends/telelatino/grab_play.sh` | on-device play-state JSON extractor |
+| `backends/telelatino/verify_stream.py` | m3u8/segment fetch through the P2P peer |
+| `backends/telelatino/portal_probe.py` | off-device portalCore gate probe |
+| `backends/telelatino/TAP-WALK-VALIDATION.md` | live UI validation evidence |
+| `backends/telelatino/E2E-VERIFIED.md` | end-to-end m3u8+ts proof |
+| `backends/telelatino/keys.md` | carved keys + BBDatabase res status |
 | `_session/channel_map_raw.json` | extractor output (all 956 + identity 934) |
 | `_session/final_map.json` | EPG-mapped + extra-heap split |
-| `backends/telelatino/keys.md` | carved 3DES keys (see below) |
 
 ## 3DES keys / BBDatabase — status
 
-SEE `keys.md`. The heap also yielded the DES key `dCsPLwiy` and the
-`e9b37dff-a143-3bf6-8d38-16d3dd06365b` tag UUID (per-install signed-URL salt),
-but the BBDatabase `res` 3DES decrypt is still being worked.
+SEE `keys.md`. `PORTAL_KEY` constant recovered from the live heap
+(`9qFMmMGyqyqnLZEHtaYHCaI5ixsSWBjXwKAs4wvtKImjppr4Gz1kTQ==`, base64) plus the
+`e9b37dff-a143-3bf6-8d38-16d3dd06365b` tag UUID (per-install signed-URL salt).
+The BBDatabase `res` 3DES decrypt produced no hit with any candidate — but the
+channel mapping never depended on it (heap carried plaintext records).
