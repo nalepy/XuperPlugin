@@ -23,3 +23,17 @@ _bench/
 
 # unitv patch work evidence (logs/pcaps/screens from the on-box verification)
 _scratch/unitv_patch/
+# capture session artifacts (memory dumps / pcaps / binaries / DBs — never commit)
+_session/*.bin
+_session/*.pcap
+_session/*.db
+_session/*.exe
+_session/*.log
+_session/alldump
+_session/probe_generic
+_session/probe_env.json
+_session/replay_results.json
+_session/portal_records_raw.txt
+_session/records_full.txt
+_session/responses_*.txt
+_session/pairs_raw.txt
