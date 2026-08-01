@@ -32,3 +32,11 @@ Caveat: they run the owner's real services — don't clobber ports/processes; sp
 - No hardware need → none; run purely in the worktree.
 > This is XTV-project-specific. The `orchestrate-agents` skill stays generic — a project only needs a
 > RESOURCES.md like this if it has external hardware to hand out.
+
+## Off-LAN access (Tailscale) — added 2026-08-01
+`.40` runs Tailscale as a **subnet router** `xtv40-subnet` (100.107.11.42), advertising+approved for
+`192.168.100.0/24` + `192.168.3.0/24` (key-expiry disabled). Any tailnet node with `--accept-routes`
+(Win11 `desktop-8rlei5c` has it) reaches the boxes at their normal LAN IPs (`192.168.100.4/8/97:5555`)
+from anywhere. Harness IPs unchanged. **Requirement:** `.40` + the boxes must stay powered at home.
+Verified from VM1 (remote): all 3 Android adb ports open via tailnet. Latency higher off-LAN — fine for
+control, sluggish for large memory dumps.
