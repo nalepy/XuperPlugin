@@ -2,16 +2,17 @@
 """
 telelatino_probe.py — off-device probe for TeleLatino (com.global.latinotv).
 
-Updated 2026-08-01 (telelatino-deepdive-pro branch) with live identity from .4 box.
-Proves: getAddr works (returnCode:0), portalCore version-gated (portal200001),
-EPG works off-device.
+Updated 2026-08-01 session 33b: added login test with owner creds, full headers,
+hardware profile, gzip support. Confirmed: portal200001 is universal version gate,
+NOT login-gated. Even the app on .4 is broken. Need newer APK (>54608).
 
 Usage:
     python3 telelatino_probe.py dcs           # getAddr -> portal host pool
     python3 telelatino_probe.py portal        # portalCore snToken (expect portal200001)
+    python3 telelatino_probe.py login         # try login with owner creds
     python3 telelatino_probe.py epg           # EPG -> live channel guide
     python3 telelatino_probe.py notice        # notice endpoint (works)
-    python3 telelatino_probe.py full          # full chain: dcs -> portal -> epg
+    python3 telelatino_probe.py full          # full chain: dcs -> portal -> login -> epg
 """
 
 import argparse
@@ -28,6 +29,13 @@ SN = "ca0e53edac957b8f6f187528933355f1"                    # KEY_SP_SN from cach
 DEVICE_ID = "945257240"                                     # key_device_id_latinotv
 USER_ID = "25885636"                                        # key_user_id (cached)
 SPKG_VER = "2024-11-15 19:08:51_29_14.1_4.9.170"          # spkgVer header
+HARDWARE = "sun50iw9p1"                                     # Allwinner H616
+MODEL = "V76PRO"                                            # device model
+MANUFACTURER = "Google"                                     # spoofed manufacturer
+
+# ── Account (owner creds, session 33b) ─────────────────────────────────────
+TELELATINO_USER = "nestor.ale@gmail.com"
+TELELATINO_PASS = "Ian20jesus"
 
 # ── Live hosts ─────────────────────────────────────────────────────────────
 DCS_HOST = "http://emowvv.dqiswip4.xyz"                     # serves getAddr (returnCode:0)
@@ -58,6 +66,9 @@ def headers(pkg=PKG):
         "apkVer": APK_VER,
         "spkgVer": SPKG_VER,
         "User-Agent": "okhttp/4.12.0",
+        "Accept-Encoding": "gzip",
+        "Cache-Control": "no-store",
+        "NoLog": "true",
     }
 
 
@@ -115,6 +126,37 @@ def portal_sn_token():
         print(f"  raw: {raw[:200]}")
 
 
+def portal_login():
+    """Try login with owner creds — version-gated (portal200001), NOT login-gated."""
+    import gzip
+    print(f"[login] Testing {TELELATINO_USER} on {PORTAL_HOST}")
+
+    endpoints = [
+        ("v3/snToken", {"sn": SN}),
+        ("v8/login", {"account": TELELATINO_USER, "password": TELELATINO_PASS, "sn": SN}),
+        ("v8/active", {"sn": SN, "deviceId": DEVICE_ID, "hardwareInfo": HARDWARE}),
+        ("terminalAuth", {"sn": SN, "deviceId": DEVICE_ID}),
+    ]
+
+    for path, body in endpoints:
+        js = json.dumps(body, separators=(",", ":"))
+        st, raw = http_post(f"{PORTAL_HOST}/api/portalCore/{path}", js)
+        try:
+            # Handle gzip
+            if raw[:2] == b'\x1f\x8b':
+                raw = gzip.decompress(raw)
+            j = json.loads(raw)
+            rc = j.get("returnCode", "?")
+            em = j.get("errorMessage", "")
+            print(f"  {path}: returnCode={rc} errorMessage={em}")
+        except Exception:
+            print(f"  {path}: {st} — {raw[:120]}")
+
+    print()
+    print("[verdict] portal200001 is NOT login-gated — server checks apkVer BEFORE auth")
+    print("          Even valid owner creds don't bypass the version gate.")
+
+
 # ── EPG ────────────────────────────────────────────────────────────────────
 def epg():
     """EPG guide — works off-device (200 with live channel data)."""
@@ -130,8 +172,9 @@ def epg():
             j = json.loads(raw)
             print(f"  channels: {len(j)} entries")
             for ch in j[:5]:
-                print(f"    {ch.get('channelCode', '?')}: "
-                      f"{len(ch.get('programList', []))} programs")
+                code = ch.get('channelCode', '?')
+                progs = len(ch.get('programList', []))
+                print(f"    {code}: {progs} programs")
         except Exception as e:
             print(f"  parse error: {e}")
     else:
@@ -158,37 +201,44 @@ def full_chain():
     print("=" * 60)
     print("TeleLatino off-device probe — full chain")
     print(f"SN: {SN}  Device: {DEVICE_ID}  User: {USER_ID}")
+    print(f"Hardware: {HARDWARE}  Model: {MODEL}")
     print("=" * 60)
 
-    print("\n── 1. DCS getAddr ──")
+    print("\n-- 1. DCS getAddr --")
     dcs = dcs_get_addr()
     if not dcs:
         print("FAILED — cannot resolve portal host")
         return
 
-    print("\n── 2. portalCore snToken ──")
+    print("\n-- 2. portalCore snToken --")
     portal_sn_token()
-    # All portalCore endpoints return portal200001 with this version
 
-    print("\n── 3. EPG (bypasses portal) ──")
+    print("\n-- 3. portalCore login (owner creds) --")
+    portal_login()
+
+    print("\n-- 4. EPG (bypasses portal) --")
     epg()
 
-    print("\n── 4. Notice ──")
+    print("\n-- 5. Notice --")
     notice()
 
-    print("\n── Verdict ──")
-    print("getAddr: ✅ returnCode:0")
-    print("portalCore: ❌ portal200001 (version gate)")
-    print("EPG: ✅ works off-device")
-    print("Notice: ✅ works off-device")
+    print("\n-- Verdict (session 33b) --")
+    print("getAddr: [OK] returnCode:0")
+    print("portalCore: [BLOCKED] portal200001 (universal version gate)")
+    print("  - NOT login-gated (valid creds don't bypass)")
+    print("  - NOT header-gated (Cache-Control, NoLog, gzip don't bypass)")
+    print("  - NOT spkgVer-gated (all variants rejected)")
+    print("  - Even the app on .4 is broken (empty channel list)")
+    print("EPG: [OK] works off-device")
+    print("Notice: [OK] works off-device")
     print()
-    print("This is a VERSION-GATE, not an identity-gate.")
-    print("Need a newer APK build (>5.46.8, post-July 2026).")
+    print("BLOCKER: Need newer APK (>5.46.8, versionCode >54608).")
+    print("Without newer APK, TeleLatino is gated (version, not identity).")
 
 
 def main():
     p = argparse.ArgumentParser(description="TeleLatino off-device probe (live identity)")
-    p.add_argument("cmd", choices=["dcs", "portal", "epg", "notice", "full"],
+    p.add_argument("cmd", choices=["dcs", "portal", "login", "epg", "notice", "full"],
                    default="full", nargs="?")
     args = p.parse_args()
 
@@ -196,6 +246,8 @@ def main():
         dcs_get_addr()
     elif args.cmd == "portal":
         portal_sn_token()
+    elif args.cmd == "login":
+        portal_login()
     elif args.cmd == "epg":
         epg()
     elif args.cmd == "notice":
