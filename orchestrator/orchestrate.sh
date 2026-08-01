@@ -63,7 +63,8 @@ cmd_dispatch(){
 
   local log="$RUNS/$task.log" prompt; prompt="$(cat "$tf")"
   echo "== dispatch $task -> branch=$branch cli=$AGENT_CLI model=${model:-<default>} wt=$wt ==" | tee -a "$log"
-  ( cd "$wt" && agent_exec "$prompt" "$model" ) >>"$log" 2>&1 &
+  # hard wall-clock cap (default 1h) so no worker runs forever; killed on timeout
+  ( cd "$wt" && timeout "$WORKER_TIMEOUT" agent_exec "$prompt" "$model" ) >>"$log" 2>&1 &
   local pid=$!
   printf '%s\t%s\t%s\t%s\t%s\n' "$pid" "$branch" "$task" "$(date '+%Y-%m-%dT%H:%M:%S')" "$wt" >> "$REG"
   echo "dispatched: pid=$pid task=$task branch=$branch log=$log"
