@@ -40,7 +40,15 @@ cmd_dispatch(){
   [ -n "$task" ] && [ -n "$branch" ] || die "usage: dispatch <task> <branch> [model]"
   local tf="$TASKS/$task.md"
   [ -f "$tf" ] || die "no task spec: $tf"
-  { [ "$AGENT_CLI" = "claude-deepseek" ] && have claude; } || have "$AGENT_CLI" || die "worker CLI '$AGENT_CLI' not on PATH"
+  # adapter names may be "cli-tier" composites (kimi-pro, command-flash, opencode-bigpickle,
+  # claude-pro...); resolve the underlying binary by stripping the tier suffix.
+  local base_cli
+  case "$AGENT_CLI" in
+    kimi*|command*|opencode*) base_cli="${AGENT_CLI%%-*}";;
+    claude*|claude-deepseek)   base_cli="claude";;
+    *)                          base_cli="$AGENT_CLI";;
+  esac
+  have "$base_cli" || die "worker CLI '$AGENT_CLI' (binary '$base_cli') not on PATH"
   [ "$(running_count)" -lt "$MAX_PARALLEL" ] || die "MAX_PARALLEL=$MAX_PARALLEL reached; wait or raise it"
 
   local wtbase; wtbase="$(cd "$REPO" && mkdir -p "$WT_BASE" 2>/dev/null; cd "$REPO/$WT_BASE" 2>/dev/null && pwd)"
