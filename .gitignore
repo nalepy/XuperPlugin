@@ -17,3 +17,4 @@ _scratch/tlsvenv/
 _scratch/jadx_xtv_main/
 _scratch/jadx_xtv_d2/
 _scratch/**/__pycache__/
+_bench/
