@@ -47,3 +47,21 @@ IMPORTANT: the deepseek env vars (`ANTHROPIC_BASE_URL=https://api.deepseek.com/a
 `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_MODEL`) route `claude` to deepseek and OVERRIDE OAuth — to hit the
 Pro account you must `env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_MODEL claude …`.
 Re-run the 4 frontier rows via `_bench/frontier-*.sh` (or the loop in this doc) after the limit resets.
+
+## Round 2 — creative task (Space Invaders HTML game, 2026-08-01)
+All 9 backends, same task ("pure HTML 80s Space Invaders", self-contained, canvas+JS). Each saved to
+`_bench/games/<backend>/space_invaders.html` (openable in a browser to judge quality).
+| backend | wall_s | html_bytes | result |
+|---|---|---|---|
+| opencode-flash | **24.3** | 4917 | ✅ canvas+js |
+| kimi-flash | 30.4 | **11554** | ✅ canvas+js |
+| claude-flash | 34.2 | 10668 | ✅ canvas+js |
+| kimi-pro | 46.1 | 7379 | ✅ canvas+js |
+| opencode-pro | 49.9 | 7994 | ✅ canvas+js |
+| opencode-bigpickle | 56.3 | **12305** | ✅ canvas+js (most verbose out=6121) |
+| command-pro | 58.8 | 0 | ❌ NO_FILE (failed to write) |
+| claude-pro | 69.6 | 11781 | ✅ canvas+js |
+| command-flash | **136.8** | 10109 | ✅ canvas+js (slowest) |
+**Takeaways:** opencode-flash fastest, kimi-flash best size-per-time, opencode-bigpickle largest output
+(verbose). **command-pro failed a creative write task** (worked on fib) — noted as a reliability caveat.
+All games are in `_bench/games/` for the owner to eyeball.
