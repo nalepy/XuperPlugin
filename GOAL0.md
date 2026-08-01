@@ -81,12 +81,16 @@ The DEX revealed the whole portalCore request pipeline from the app's own code:
   request log (heap `service_name:"portal"` DoHttpSec record) shows the real body uses **`b29`
   lowercase**, **`contentType` INSIDE the body**, and **no `lang`/`type`** in the common fields.
   The plugin envelope was corrected accordingly (`XuperApiClient.kt`, session 30).
-- **`portal200001` is a CONNECTION-LEVEL client-identity gate (proven session 30):** it fires for any
-  non-app client BEFORE the body is parsed (garbage body → same response). The app's requests go
-  through the **Titan Ranger native layer** (`DoHttpSec`) whose bundled TLS stack negotiates
-  `TLS_AES_128_GCM_SHA256` (0xcca9 — a TLS 1.3 cipher) inside a TLS 1.2 handshake; standard clients
-  negotiate 0xc02b. A Go `utls` probe (`_scratch/utlsclient/`) now replicates that negotiation but the
-  residual diff is inside the Ranger native HTTP/2 layer. Full detail: `GOAL2.md` Session 30.
+- **`portal200001` is an ORIGIN-LEVEL native-signed-TOKEN gate (refined session 31; was mis-framed as
+  TLS-identity in session 30).** Session 31 proved: the response is generated at the **origin**
+  (Envoy/Google behind Cloudflare — `Via: 1.1 google`, `X-Envoy-Upstream-Service-Time`, `cfOrigin;dur=200`),
+  NOT at the CF edge, so it is **not** a JA3/TLS-fingerprint block (the Go `utls` probe already matches the
+  app's exact `0xcca9`-in-TLS1.2 handshake and still gets gated). Any `apkVersion` value (up to 99999) is
+  **ignored**. The gate keys on the encrypted **`b29`/`reserve1`** body tokens, which are minted by the
+  **Titan Ranger native layer** (`NativeJni`/`DoHttpSec`, `SE.sd @ 0x1203fc3d`) under a native key — they
+  do NOT decrypt with the recovered body 3DES key. Beat it only by minting fresh native tokens (hook
+  `qd.a.a.k()` inputs on the live app, or reverse the native crypto) or by sidestepping portalCore. Full
+  proof: `GOAL2.md` Session 31.
 
 ### Goal 1 targets — still pending (decompiled sources now local)
 - The gate-check search (email-reg / forced-update / VIP-payment) is NOT done yet. The decompiled
