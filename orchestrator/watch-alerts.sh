@@ -15,6 +15,15 @@ ALERTS="$HERE/alerts"; mkdir -p "$ALERTS"
 THRESH="${ALERT_THRESHOLD:-600}"   # seconds unanswered before escalating (default 10 min)
 POLL="${ALERT_POLL:-60}"
 
+# baseline: signals already present at startup are treated as already-handled
+# (only NEW asks that appear after launch will escalate). Avoids false alarms on relaunch.
+shopt -s nullglob
+for s in "$REPO"/../*-wt/*/backends/*/NEEDS.md "$ALERTS"/*.pending; do
+  [ -f "$s" ] || continue
+  id="$(printf '%s' "$s" | md5sum | cut -c1-12)"
+  [ -f "$ALERTS/$id.sent" ] || { date +%s > "$ALERTS/$id.seen"; date +%s > "$ALERTS/$id.sent"; }
+done
+
 while true; do
   shopt -s nullglob
   signals=( "$REPO"/../*-wt/*/backends/*/NEEDS.md "$ALERTS"/*.pending )
