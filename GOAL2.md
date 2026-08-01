@@ -44,6 +44,10 @@
 ### Caveats / notes
 - The box `.97` is flaky (app dies every few minutes; adb drops; vmread intermittently EPERM after app
   restart). The harvester retries; a reboot of `.97` helps.
+- **Anti-tamper watchdog:** after the app runs a while, its ijiami/Ranger watchdog sets the process
+  non-dumpable, so `process_vm_readv` (vmread) starts failing with EPERM. Restart the app
+  (`am force-stop` + relaunch) to reset dumpable, or reboot the box. The harvester should keep the last
+  good playlist while reads fail.
 - The harvester must read the app's memory **while the app is actually playing** (Home preview plays a
   channel by default). The app's `dumpable` flag can block `/proc` reads intermittently — retry.
 - Only the currently-playing channel's window is harvested. Channel zapping in the app changes the

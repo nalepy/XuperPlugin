@@ -91,14 +91,22 @@ def find_live_window(pid):
     # fallbacks in case the app restarted and moved regions. Read only 1MB
     # per region (segment names are dense) to keep cycles fast.
     for start, end in regions:
-        size = min(end - start, 6 * 1024 * 1024)
-        b = None
-        for attempt in range(3):  # vmread is intermittently EPERM — retry
-            sh(ADB + ["shell", "su", "-c",
-                      f"{VMREAD} {pid} {start:x} {size} /data/local/tmp/h5.bin"])
-            b = sh(ADB + ["shell", "su", "-c", "cat /data/local/tmp/h5.bin"])
+        # read in 1MB chunks, skipping failed chunks (first page may be
+        # unreadable while deeper offsets hold the live segment window)
+        chunks = []
+        total = min(end - start, 6 * 1024 * 1024)
+        for off in range(0, total, 1024 * 1024):
+            sz = min(1024 * 1024, total - off)
+            b = None
+            for attempt in range(3):
+                sh(ADB + ["shell", "su", "-c",
+                          f"{VMREAD} {pid} {start + off:x} {sz} /data/local/tmp/h5.bin"])
+                b = sh(ADB + ["shell", "su", "-c", "cat /data/local/tmp/h5.bin"])
+                if b:
+                    break
             if b:
-                break
+                chunks.append(b)
+        b = b"".join(chunks) if chunks else None
         if not b:
             continue
         for m in SEG_RE.finditer(b):
