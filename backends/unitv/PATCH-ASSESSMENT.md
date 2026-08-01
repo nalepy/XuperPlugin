@@ -3,7 +3,9 @@
 > Worker: `unitv-patch-assess` branch. Date: 2026-08-01 (session 33).
 > Scope: go/no-go on "patch the app itself and repack" (HANDOFF.md goal option 2).
 > Boxes: `.4` (Android 14 TV, adb root) for runtime; `.40` (ubuntu, java 17) for build.
-> Artifacts: this file + `patch_smali.py` (the working smali patch). APKs / decompile stay untracked.
+> Second pass (this worker's constraints): runtime verification on `.97` (Android 7.1.2, rooted, V88).
+> Artifacts: this file + `patch_smali.py` (minimal 2-no-op patch) + `patch_unitv.sh` (full
+> build/sign pipeline) + `anti_tamper_smali.patch` (clean diff). APKs / decompile stay untracked.
 
 ## TL;DR verdict
 
@@ -168,6 +170,58 @@ gate that a client patch can open — the operator has retired the 2.14.8 endpoi
 
 ---
 
+## 4b. Independent verification — box `.97` (this run, second worker pass)
+
+Re-verified end-to-end on the box the task assigned to this worker (`.97`, V88, Android 7.1.2, rooted;
+the real packed `com.global.unitviptv` running alongside). All conclusions above reproduce exactly.
+
+**Unpatched stock APK on `.97`:** installs, launches, then dies ~4 s in with a self-SIGKILL and
+restarts forever (`Process: Sending signal. PID: <pid> SIG: 9` in logcat; `Process
+com.integration.unitviptv (pid X) has died` every ~4-6 s). No Java exception — the `util/c.a()`
+kill bomb. Same signature-gate root cause (cert md5 `647a88ef…` vs `R.string.qm` `8ddb342f…`).
+
+**Patched build on `.97` (built with `patch_unitv.sh`, signed with a fresh RSA-2048 keystore):**
+installs over a clean uninstall, launches, survives 45 s+ across multiple force-stop/relaunch cycles
+(no `has died`, no SIGKILL), passes intro → `MainAty` (bottom tabs VOD / Live / Profile). The
+server-driven **"Version Upgrade" dialog still appears** (server still pushes 4.11.0) and BACK now
+dismisses it instead of killing the process — the `HomeUpgradeDialog.onBackPressed` patch works. The
+Live tab renders no channel list.
+
+**Wire evidence (root tcpdump on `.97`, 30 s window):** the app resolves hosts via **DoH to Google**
+(`142.251.129.66:443` — no port-53 queries; the router DNS is dead, matching the sibling session
+notes) and then makes exactly four HTTP calls:
+
+| Request (from pcap) | Host (resolved via DoH) | Result |
+|---|---|---|
+| `POST /api/v2/dcs/getAddr` | `mobile.solz1lf.com` → 52.85.78.22 (CloudFront) | **404** `X-Cache: Error from cloudfront` |
+| `GET /MarketServer/update?…=com.integration.unitviptv,21408` | `akz1.pudisdz.com` → 172.67.131.197 | **200** (UpdateInfo → 4.11.0 `jiagu` apk) |
+| `POST /ADServer/v1.0/get_config` | `mobiletv.ogy1lfw.com`/`terdlfw.com` (Cloudflare) | **404** |
+| `POST /api/apk/playError` | `cool.kfsxdz.com` → 172.67.155.75 | sent (no stream impact) |
+
+SYN-ACK map: all Cloudflare + AWS + Chinese-analytics hosts answer; **two SYN timeouts** —
+`cool.nbgfbr.com` (23.89.152.2, the backup stream-CDN host — dead) and `amdcopen.m.taobao.com`
+(taobao push, irrelevant). After the getAddr 404 the app makes **no further portal calls**
+(no `active`/`getAuthInfo`/`getColumnContents`/`startPlayLive` on the wire) — the chain is
+bootstrap-dead, exactly as section 1b describes.
+
+**PC-side probe matrix (same endpoint set, direct from the PC):**
+
+| Endpoint | State |
+|---|---|
+| `mobile.solz1lf.com/api/v2/dcs/getAddr` (main) | **404** (app body) / **500** (probe body) |
+| `mbfel.lgesetd1l.com` (backup) | NXDOMAIN |
+| `dc3.tesgdz.com` / `dc3.hgsesd.com` (dccore) | 521 (origin down) |
+| `cool.kfsxdz.com` (datacollect) | timeout from PC |
+| `mobiletv.ogy1lfw.com` (ad) | 404 |
+| `pre.itgfgdz.com` (epg) | 403 |
+| `mobile.solz1lf.com/v1/aws/vpkg?asfast=true` (the **current** native DCS path) | **400** (endpoint alive — rejects a malformed body, i.e. the operator's live protocol is the native titan DCS, not this build's legacy Java path) |
+
+Conclusion unchanged and now double-proven: the patch route is mechanically sound; the 2.14.8 build is
+orphaned at the protocol level. A clean diff of the applied smali changes is committed as
+[`anti_tamper_smali.patch`](anti_tamper_smali.patch).
+
+---
+
 ## 5. Verdict
 
 | Question | Answer |
@@ -221,4 +275,8 @@ but moot because the build is orphaned. Forward options:
 ```
 
 Rebuild artifact (`unitv_signed.apk`, ~30 MB, signed with a throwaway key) lives on `.40`
-(`~/apktool/`); kept untracked per constraints. Re-installed on `.4` at the end of this session.
+(`~/apktool/`) and on this worker's box (`.97`) as `UniTV_patched_2.14.8.apk` (built by
+`patch_unitv.sh`, `~/Workspace/FakeUnitv/unitv_patch_work/`); kept untracked per constraints.
+
+The full applied diff is also committed as `anti_tamper_smali.patch` (regenerated from a clean
+apktool re-decode; `patch -p1`-able against the decoded tree).

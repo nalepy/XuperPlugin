@@ -17,3 +17,6 @@ _scratch/tlsvenv/
 _scratch/jadx_xtv_main/
 _scratch/jadx_xtv_d2/
 _scratch/**/__pycache__/
+
+# unitv patch work evidence (logs/pcaps/screens from the on-box verification)
+_scratch/unitv_patch/
