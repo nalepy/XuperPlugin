@@ -40,7 +40,7 @@ cmd_dispatch(){
   [ -n "$task" ] && [ -n "$branch" ] || die "usage: dispatch <task> <branch> [model]"
   local tf="$TASKS/$task.md"
   [ -f "$tf" ] || die "no task spec: $tf"
-  have "$AGENT_CLI" || die "worker CLI '$AGENT_CLI' not on PATH"
+  { [ "$AGENT_CLI" = "claude-deepseek" ] && have claude; } || have "$AGENT_CLI" || die "worker CLI '$AGENT_CLI' not on PATH"
   [ "$(running_count)" -lt "$MAX_PARALLEL" ] || die "MAX_PARALLEL=$MAX_PARALLEL reached; wait or raise it"
 
   local wtbase; wtbase="$(cd "$REPO" && mkdir -p "$WT_BASE" 2>/dev/null; cd "$REPO/$WT_BASE" 2>/dev/null && pwd)"
