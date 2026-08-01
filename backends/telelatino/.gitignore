@@ -1,0 +1,8 @@
+# build artifacts / captures / secrets
+*.apk
+*.pcap
+*.dex
+*.so
+__pycache__/
+runs/
+_scratch/
