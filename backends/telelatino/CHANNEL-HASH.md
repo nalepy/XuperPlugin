@@ -50,7 +50,7 @@ AMC row).
 ### 1. EPG identity channels (174) — code == m3u8 key
 
 All EPG codes of the form `cyx_<hex/digits>` (173) and `cyx-<28hex>` (1) are
-their own m3u8 key. Full list: `_session/final_map.json` + the derive worker's
+their own m3u8 key. Full list: `backends/telelatino/epg_map.json` + the derive worker's
 `corpus/identity_table_174.csv`.
 
 ### 2. EPG human-named channels mapped from heap (69)
@@ -73,7 +73,7 @@ companion). Key entries:
 
 The heap's channel list is a SUPERSET of the EPG (956 mapped codes, including
 827 not present in the 344-EPG — regional/extra channels). All in
-`_session/channel_map_raw.json` / `_session/final_map.json`.
+`backends/telelatino/heap_channel_map.json` / `backends/telelatino/epg_map.json`.
 
 ### 4. Unmapped EPG codes (59)
 
@@ -106,8 +106,8 @@ path: the MarketServer update check returns `<ApkInfo><list rows="0"/></ApkInfo>
 | `backends/telelatino/TAP-WALK-VALIDATION.md` | live UI validation evidence |
 | `backends/telelatino/E2E-VERIFIED.md` | end-to-end m3u8+ts proof |
 | `backends/telelatino/keys.md` | carved keys + BBDatabase res status |
-| `_session/channel_map_raw.json` | extractor output (all 956 + identity 934) |
-| `_session/final_map.json` | EPG-mapped + extra-heap split |
+| `backends/telelatino/heap_channel_map.json` | extractor output (all 956 + identity 934) |
+| `backends/telelatino/epg_map.json` | EPG-mapped + extra-heap split |
 
 ## 3DES keys / BBDatabase — status
 

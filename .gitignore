@@ -33,6 +33,15 @@ _session/*.pcap
 _session/*.db
 _session/*.exe
 _session/*.log
+_session/*.apk
+_session/*.ts
+_session/*.hprof
+_session/*.png
+_session/*.xml
+_session/*.txt
+_session/*.json
+_session/*.py
+_session/*.sh
 _session/alldump
 _session/probe_generic
 _session/probe_env.json
