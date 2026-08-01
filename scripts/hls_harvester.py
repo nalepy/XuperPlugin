@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""XuperPlugin sidestep harvester — reads the Unitv app's LIVE m3u8 from .97's
-memory, serves standard HLS whose segments come from the OPEN CDN.
+"""XuperPlugin sidestep harvester — reads the Unitv app's live m3u8 window from
+.97's memory, serves standard HLS whose segments come from the OPEN CDN.
 
 PROVEN (session 32): the portalCore gate is native-minted tokens we cannot forge,
 BUT the Unitv segment tier is OPEN on the CDN hosts (a76ckxbfx.lpqmscuto.com,
-tuyt.wtyzqunkv.com) — predictable URLs, no auth. The app's own m3u8 (channel +
+tuyt.wtyzqunkv.com) — predictable URLs, no auth. The live window (channel +
 variant + rd values) is readable from the running app's memory on the rooted box.
 
 Usage: python hls_harvester.py [--port 8000]
@@ -26,14 +26,12 @@ VMREAD = "/data/local/tmp/vmread"
 
 CDN_FALLBACKS = ["a76ckxbfx.lpqmscuto.com", "tuyt.wtyzqunkv.com"]
 
-M3U8_RE = re.compile(
-    rb'#EXTM3U.{0,6000}?'
-    rb'#EXT-SEGMENT:[^\r]*?/rd=(\d+)\r\n#EXTINF:([^\r]*)\r\n'
-    rb'(pt_[A-Za-z0-9_]+)/(pt_[A-Za-z0-9_]+_[a-z0-9]+_\d+\.ts)',
-    re.DOTALL)
+SEG_RE = re.compile(rb'(pt_[A-Za-z0-9_]+)_([a-z0-9]+)_(\d{6,12})\.ts')
+
+_last_region = 0  # region that held the newest rd last time
 
 
-def sh(cmd, timeout=20):
+def sh(cmd, timeout=25):
     try:
         return subprocess.run(cmd, capture_output=True, timeout=timeout).stdout
     except Exception:
@@ -71,13 +69,11 @@ def probe_cdn_host(ch, var, rd, timeout=4):
     return CDN_FALLBACKS[0]
 
 
-_last_m3u8_region = 0  # cached region that held the m3u8 last time
-
-def find_live_m3u8(pid):
-    """Scan ALL malloc regions; collect every cached m3u8 block; take the
-    GLOBAL max rd as the live edge (the app caches old playlists in old
-    regions, so the first region with blocks is often stale)."""
-    global _last_m3u8_region
+def find_live_window(pid):
+    """Scan malloc regions for segment NAMES (pt_<ch>_<var>_<rd>.ts) — the
+    live window region changes on app restart, so scan the last-known region
+    first, then a couple of other small regions; keep the global max rd."""
+    global _last_region
     out = sh(ADB + ["shell", "su", "-c", f"cat /proc/{pid}/maps"]).decode("utf-8", "replace")
     regions = []
     for line in out.splitlines():
@@ -86,40 +82,43 @@ def find_live_m3u8(pid):
             rng = parts[0].split("-")
             if len(rng) == 2:
                 regions.append((int(rng[0], 16), int(rng[1], 16)))
-    all_blocks = []
+    if _last_region:
+        regions.sort(key=lambda r: (r[0] != _last_region, r[0]))
+    best = None  # (rd, channel, variant)
+    best_region = 0
+    _rds_found = set()
+    # scan the cached best region first (it holds the live window), plus
+    # fallbacks in case the app restarted and moved regions. Read only 1MB
+    # per region (segment names are dense) to keep cycles fast.
     for start, end in regions:
-        size = min(end - start, 8 * 1024 * 1024)
-        sh(ADB + ["shell", "su", "-c",
-                  f"{VMREAD} {pid} {start:x} {size} /data/local/tmp/h5.bin"])
-        b = sh(ADB + ["shell", "su", "-c", "cat /data/local/tmp/h5.bin"])
+        size = min(end - start, 6 * 1024 * 1024)
+        b = None
+        for attempt in range(3):  # vmread is intermittently EPERM — retry
+            sh(ADB + ["shell", "su", "-c",
+                      f"{VMREAD} {pid} {start:x} {size} /data/local/tmp/h5.bin"])
+            b = sh(ADB + ["shell", "su", "-c", "cat /data/local/tmp/h5.bin"])
+            if b:
+                break
         if not b:
             continue
-        blocks = M3U8_RE.findall(b)
-        if blocks:
-            _last_m3u8_region = start
-            all_blocks.extend(blocks)
-    if not all_blocks:
+        for m in SEG_RE.finditer(b):
+            rd = int(m.group(3))
+            _rds_found.add(rd)
+            if best is None or rd > best[0]:
+                best = (rd, m.group(1).decode(), m.group(2).decode())
+                best_region = start
+    if not best:
         return None
-    all_blocks = sorted(set(all_blocks), key=lambda x: int(x[0]))
-    ch = all_blocks[-1][2].decode()
-    var = all_blocks[-1][3].decode().split('_')[-2]
-    host = probe_cdn_host(ch, var, int(all_blocks[-1][0]))
+    _last_region = best_region
+    rd_max, ch, var = best
+    host = probe_cdn_host(ch, var, rd_max)
+    all_rds = sorted(_rds_found, reverse=True)[:6]
     lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TARGETDURATION:6",
-             "#EXT-X-MEDIA-SEQUENCE:" + all_blocks[-1][0].decode()]
-    # serve the newest ~5 that are still live on the CDN (segments rotate ~5s)
-    served = 0
-    for rd, inf, _, seg in reversed(all_blocks[-10:]):
-        if served >= 5:
-            break
-        rd = rd.decode(); inf = inf.decode(); seg = seg.decode()
-        if probe_cdn_host(ch, var, int(rd)) != host:
-            continue
-        lines.append(f"#EXTINF:{inf}")
-        lines.append(f"http://{host}/live/{ch}/{seg}")
-        served += 1
-    if served == 0:
-        return None
-    return ("\n".join(lines) + "\n").encode(), ch, var, host, all_blocks[-1][0].decode()
+             "#EXT-X-MEDIA-SEQUENCE:" + str(all_rds[-1])]
+    for rd in reversed(all_rds):
+        lines.append("#EXTINF:5.0,")
+        lines.append(f"http://{host}/live/{ch}/{ch}_{var}_{rd}.ts")
+    return ("\n".join(lines) + "\n").encode(), ch, var, host, str(rd_max)
 
 
 class Harvester:
@@ -135,9 +134,9 @@ class Harvester:
         if not pid:
             self.last_error = "app not running"
             return
-        r = find_live_m3u8(pid)
+        r = find_live_window(pid)
         if not r:
-            self.last_error = "no live m3u8 in memory"
+            self.last_error = "no live window in memory"
             return
         pl, ch, var, host, rd = r
         with self.lock:
