@@ -1,0 +1,7 @@
+# build artifacts / captures / secrets — keep out of git
+*.apk
+*.pcap
+*.dex
+*.so
+__pycache__/
+runs/
