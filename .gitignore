@@ -19,6 +19,10 @@ _scratch/jadx_xtv_d2/
 _scratch/YouCine.apk
 _scratch/youcine_apk/
 _scratch/**/__pycache__/
+_scratch/*.db
+_scratch/*.xml
+_scratch/*.sh
+_scratch/*.ts
 _bench/
 
 # unitv patch work evidence (logs/pcaps/screens from the on-box verification)
