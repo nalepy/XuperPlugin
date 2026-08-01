@@ -43,7 +43,9 @@ cmd_dispatch(){
   have "$AGENT_CLI" || die "worker CLI '$AGENT_CLI' not on PATH"
   [ "$(running_count)" -lt "$MAX_PARALLEL" ] || die "MAX_PARALLEL=$MAX_PARALLEL reached; wait or raise it"
 
-  local wt="$WT_BASE/$branch"
+  local wtbase; wtbase="$(cd "$REPO" && mkdir -p "$WT_BASE" 2>/dev/null; cd "$REPO/$WT_BASE" 2>/dev/null && pwd)"
+  [ -n "$wtbase" ] || die "cannot resolve WT_BASE=$WT_BASE under $REPO"
+  local wt="$wtbase/$branch"
   if git -C "$REPO" show-ref --verify --quiet "refs/heads/$branch"; then
     echo "branch $branch exists — reusing worktree $wt"
     [ -d "$wt" ] || git -C "$REPO" worktree add "$wt" "$branch" || die "worktree add failed"
