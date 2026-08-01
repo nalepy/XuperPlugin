@@ -5,6 +5,51 @@
 > source under `app/src/main/java/com/xuper/plugin/`, but you can plan from this file alone. `GOAL0.md`,
 > `GOAL1.md`, and `GOAL2.md` are the three canonical working docs from now on.
 
+## ⭐ SESSION 32 BREAKTHROUGH — the plugin STREAMS via the Unitv sidestep (2026-08-01) ⭐
+
+> **A live HLS source is WORKING end-to-end through XuperPlugin.** The XTV portalCore backend is EOL
+> (session 31), but the **Unitv sister app** (`com.global.unitviptv` v4.19.1 on box `.97`) streams the
+> same channels via the **koocan backend** — and its **segment tier is OPEN** (no auth, predictable URLs).
+> The only gated piece is the m3u8 (which segments are live), and that is **readable from the running
+> app's memory** on the rooted box. Proof: `ffplay` played **HEVC 1280×720 + AAC** live TV through the
+> plugin's Harvester Proxy.
+
+### The discovery chain (what was proven this session)
+1. **Off-device portalCore replication is DEAD on the koocan backend too.** Built a Go `utls` probe
+   (`_scratch/utlsclient/probe_real.exe` → later `FakeUnitv/utlsclient/main.go`) with the REAL b29/
+   reserve1 blobs from `.97`'s `/sdcard/.properties` (decrypt: `key_sn_token`→SN, `key_device_id`→uid),
+   a FRESH userToken from prefs, and both portalCodes (`unitvnew`, `koocanmobile2`) → **still
+   `portal200001`**. The gate is native-minted per-request tokens — same wall as XTV.
+2. **The Unitv app on `.97` streams live** (video decoder active; full playlist→segment chain captured
+   in pcap + memory). Its local proxy (`127.0.0.1:<port>`) serves the app's own player but rejects
+   external connections (peer validation), so direct proxy reuse is out.
+3. **The CDN segment tier is OPEN.** Segment URLs are predictable:
+   `http://a76ckxbfx.lpqmscuto.com/live/<channel>/<channel>_<variant>_<rd>.ts` (also
+   `tuyt.wtyzqunkv.com`) — plain GET, **no cookies, no auth** → `206 video/mp2t`. The `rd` values
+   increment ~+5000 every ~5s (live window, segments rotate).
+4. **The m3u8 (which channels/variants/rds are live) is in the app's memory** — harvestable from the
+   rooted box with `vmread` + `grep`. Channel keys look like `pt_NsliyFtBFDwqpLz8VTUAQzs_720p`,
+   variants like `pycjn2`/`shisui`/`pytsp4`.
+
+### The working deliverable
+- **`scripts/hls_harvester.py`** — reads `.97` app memory (adb+vmread), extracts the newest m3u8 block,
+  probes which CDN host serves it, serves standard HLS on `:8765/live.m3u8`. **Verified: ffplay plays
+  HEVC+AAC live.**
+- **Plugin Harvester Proxy mode** (`ConfigActivity` "Harvester Proxy" button + `XuperConfig.harvesterUrl`):
+  point the plugin's `M3uProxyServer` at the harvester m3u8 URL → the plugin serves standard HLS on the
+  box. **Verified end-to-end on `.4`** via `adb reverse tcp:8765` (Win11→.4) with ffprobe/ffplay.
+- Deployment for a real player: run `hls_harvester.py` on any host with adb to `.97`, set the plugin's
+  Harvester URL to that host, start Harvester Proxy, point VLC/TiviMate at `http://<box>:<port>/playlist.m3u`.
+
+### Caveats / notes
+- The box `.97` is flaky (app dies every few minutes; adb drops; vmread intermittently EPERM after app
+  restart). The harvester retries; a reboot of `.97` helps.
+- The harvester must read the app's memory **while the app is actually playing** (Home preview plays a
+  channel by default). The app's `dumpable` flag can block `/proc` reads intermittently — retry.
+- Only the currently-playing channel's window is harvested. Channel zapping in the app changes the
+  window; the harvester follows automatically.
+- The `rd` window is ~6 segments (~30s). Standard HLS players refetch the playlist and stay live.
+
 ## Objective
 Ship **our own** IPTV app/plugin (XuperPlugin) that uses **XTV's backend** to stream the same channels —
 turning XTV (`com.android.mgstv`) into an open **M3U/HLS source** playable in VLC / TiviMate / Kodi, with

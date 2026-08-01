@@ -52,6 +52,10 @@ data class XuperConfig(
     val password: String = "Ian20jesus",
     val playlistPath: String = "",
     val segmentPath: String = "",
+    // Harvester mode: point the proxy at a live HLS m3u8 served by the sidestep
+    // harvester (reads the Unitv app's live segment window from .97's memory).
+    // The segments in that playlist are OPEN on the CDN — no cookies needed.
+    val harvesterUrl: String = "",
     // --- getAuthInfo/getLiveData request envelope (captured device fields, V76PRO) ---
     val appId: String = "com.android.msandroid",
     val apkVersion: String = "43405",

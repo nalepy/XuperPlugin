@@ -26,6 +26,7 @@ class ConfigActivity : Activity() {
     private lateinit var userTokenInput: EditText
     private lateinit var emailInput: EditText
     private lateinit var passwordInput: EditText
+    private lateinit var harvesterUrlInput: EditText
     private lateinit var playlistPathInput: EditText
     private lateinit var segmentPathInput: EditText
     private lateinit var statusText: TextView
@@ -68,6 +69,11 @@ class ConfigActivity : Activity() {
         userTokenInput = createInput(layout, "userToken (optional)", "")
         emailInput = createInput(layout, "Email (optional v8/login)", "your@email.com")
         passwordInput = createInput(layout, "Password (optional)", "password", isPassword = true)
+        harvesterUrlInput = createInput(
+            layout,
+            "Harvester m3u8 URL (sidestep mode)",
+            "http://192.168.100.5:8765/live.m3u8"
+        )
 
         val buttonRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -138,6 +144,18 @@ class ConfigActivity : Activity() {
         }
         thirdRow.addView(loginBtn, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
         layout.addView(thirdRow)
+
+        val fourthRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, dp(8))
+        }
+
+        val harvesterBtn = Button(this).apply {
+            text = "Harvester Proxy"
+            setOnClickListener { toggleHarvesterProxy() }
+        }
+        fourthRow.addView(harvesterBtn, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+        layout.addView(fourthRow)
 
         statusText = TextView(this).apply {
             setTextColor(Color.parseColor("#AAAAAA"))
@@ -213,6 +231,7 @@ class ConfigActivity : Activity() {
         userTokenInput.setText(c.userToken)
         emailInput.setText(c.email)
         passwordInput.setText(c.password)
+        harvesterUrlInput.setText(c.harvesterUrl)
         updateProxyButton()
         val missing = apiClient.missingCookies()
         when {
@@ -244,7 +263,8 @@ class ConfigActivity : Activity() {
             userId = userIdInput.text.toString().trim(),
             userToken = userTokenInput.text.toString().trim(),
             email = emailInput.text.toString().trim(),
-            password = passwordInput.text.toString()
+            password = passwordInput.text.toString(),
+            harvesterUrl = harvesterUrlInput.text.toString().trim()
         )
         statusText.text = "Settings saved"
         statusText.setTextColor(Color.parseColor("#4CAF50"))
@@ -353,6 +373,53 @@ class ConfigActivity : Activity() {
                     statusText.setTextColor(Color.parseColor("#4CAF50"))
                 } else {
                     statusText.text = "Proxy failed to start"
+                    statusText.setTextColor(Color.parseColor("#F44336"))
+                }
+            }
+        }.start()
+    }
+
+    private fun toggleHarvesterProxy() {
+        saveConfig()
+        val proxy = proxyServer
+        if (proxy != null && proxy.isRunning()) {
+            proxy.stop()
+            proxyServer = null
+            updateProxyButton()
+            statusText.text = "Proxy stopped"
+            statusText.setTextColor(Color.parseColor("#FFEB3B"))
+            return
+        }
+
+        val url = apiClient.config.harvesterUrl
+        if (url.isBlank()) {
+            statusText.text = "Set Harvester m3u8 URL first"
+            statusText.setTextColor(Color.parseColor("#F44336"))
+            return
+        }
+
+        statusText.text = "Starting harvester proxy…"
+        statusText.setTextColor(Color.parseColor("#FFEB3B"))
+
+        val newProxy = M3uProxyServer(this)
+        newProxy.onStatusChanged = { status ->
+            runOnUiThread { statusText.text = status }
+        }
+
+        // Harvester playlist carries direct OPEN CDN segment URLs — no cookies needed.
+        // The M3uProxyServer's rewriteM3u passes direct .ts URLs through unchanged.
+        newProxy.start(url, "", "", "", "")
+        proxyServer = newProxy
+
+        Thread {
+            Thread.sleep(800)
+            runOnUiThread {
+                updateProxyButton()
+                if (newProxy.isRunning()) {
+                    statusText.text = "Harvester proxy running → ${newProxy.getProxyUrl()}"
+                    statusText.setTextColor(Color.parseColor("#4CAF50"))
+                } else {
+                    statusText.text = "Harvester proxy failed to start"
                     statusText.setTextColor(Color.parseColor("#F44336"))
                 }
             }
