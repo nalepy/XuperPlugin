@@ -11,6 +11,12 @@ turning XTV (`com.android.mgstv`) into an open **M3U/HLS source** playable in VL
 **no email registration, no VIP paywall, no forced updates**, all from our own APK.
 
 ## Honest verdict (read first) — UPDATED session 31
+> **⚠ DO ROUTE 0 FIRST (session 31 round 3):** `.4`'s own telemetry (`BBDatabase.db`) shows the **real
+> app is currently 403-ing its EPG/portal calls and hitting play_error 2002** — i.e. the legit app may
+> not be streaming right now either. If so, `portal200001` is a **global version/account EOL**, not a
+> client gap, and replicating the request is moot until the app itself streams. **Confirm the real app
+> plays live on `.4` before any further replication work.** Detail: "Session 31 round 3" below.
+
 **The `portal200001` gate is an ORIGIN-LEVEL native-signed-token check (session 31), NOT a TLS/JA3 or
 h2-fingerprint block.** Session 31 proved the response is generated at the origin (Envoy/Google behind
 Cloudflare, not the CF edge), that any `apkVersion` value (up to 99999) is ignored, and that the gate
@@ -278,11 +284,36 @@ per-request token check.** You cannot beat it from Java/utls alone. The two live
 cd _scratch/utlsclient && go build -o probe.exe .
 ./probe.exe                 # baseline: 0xcca9 TLS OK, still portal200001, dumps resp headers
 VER=99999 ./probe.exe       # version ignored — still portal200001
+TOK=<fresh-uuid> UID=169355704 EXP=<unix> ./probe.exe   # session-31 lead: fresh userToken
 ```
 
+### Session 31 round 3 — CRITICAL: the real app itself is failing NOW (verify before more work)
+Pulled `.4`'s live analytics DB (`/data/data/com.android.mgstv/databases/BBDatabase.db` →
+`_session/bb_now.db`, telemetry — account `nestor.ale@gmail.com`, `uid 169355704`). Its recent
+`app_api`/`play_error` records show the **legit app is currently erroring**, not streaming clean:
+- `app_api … httpStatus:403 … uri:/epg/v2/live/app/utc-3/26` (multiple)
+- `app_api … httpStatus:50012 … uri:/notice/api/get_notice`, `50013` on a `/public/images/*.png`
+- `play_error … err:2002 … host:dcs_internal_main … dns:cloudflare-dns.com`
+
+**Implication:** if the real app on `.4` is 403-ing its own EPG/portal calls, then `portal200001` is
+plausibly a **global version/account EOL** (app 43405 cut off server-side for everyone, incl. the app —
+matches GOAL1's "版本已停止使用" / forced-update), NOT merely a client-fingerprint gap we can close by
+matching TLS/tokens. **The next agent MUST first establish ground truth: does the real XTV app on `.4`
+currently play live channels at all?**
+- If **NO** → the account/version is EOL. Paths: (a) obtain a newer app build with a higher `apkVer` the
+  server still accepts (check for an XTV/BrasilTV update); (b) re-login/renew the account; (c) confirm
+  via the sister apps (see `_session/mgstv_luna/`, FakeUnitv notes) whether a live account streams today.
+  Replicating our own request is pointless until a *known-good* live request exists to diff against.
+- If **YES** (it does play) → the failure is client-side after all; resume the token/replay lead above
+  (fresh `TOK` + static b29/reserve1) and the native-token hook.
+Note: `bb_now.db` and heap contain the account email — keep in `_session/` (untracked), do not commit.
+
 ## Routes to the wire diff — ranked cheapest first
+> **Route 0 (do FIRST, session-31 round 3):** confirm the real app streams live on `.4` *right now*.
+> If it doesn't (its own telemetry shows 403/play_error), this is a version/account EOL — see the
+> "round 3" note above — and routes 1–3 below are premature.
 1. **Live memory / DEX dump from `.4` (rooted, ADB) — RECOMMENDED, sidesteps the emulation wall.**
-   The real app runs and streams on `.4`, so ijiami decrypts the app DEX **into process memory** at
+   The real app runs on `.4`, so ijiami decrypts the app DEX **into process memory** at
    runtime, and the app's own code builds an accepted portalCore request there. Prior sessions already
    dumped ~52 MB of process memory from `.4` and carved `libexec.so` out of it. Do the same for the
    **decrypted `classes.dex`** (search the maps for `dex\n035` magic / large RW anon regions), then read

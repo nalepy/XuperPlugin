@@ -43,8 +43,13 @@ func main() {
 	if appVer == "" {
 		appVer = "43405"
 	}
+	// session-31 lead: replay .4's STATIC b29/reserve1 with a FRESH userToken.
+	// env overrides so the next agent can test in one command once a live token is pulled.
+	tok := envOr("TOK", "94f1ace7-bb6b-4a79-ab0e-a2df4d5bcebe")
+	uid := envOr("UID", "169355704")
+	exp := envOr("EXP", "1785953097")
 	// -------- build the request body exactly like the app --------
-	body := `{"apkVersion":"` + appVer + `","appId":"com.android.msandroid","appLanguage":"es","b29":"4f6f786b4b5a7a3933666842554e6c55717338584b71325a3635436b4e463736583442714b345572434a504c556e72384136647252773d3d","contentType":"application/json;charset=utf-8","cpu":"armeabi-v7a","deviceToken":"","hardwareInfo":"sun50iw9p1","loginType":"2","model":"V76PRO","portalCode":"masnew","product":"walley","reserve1":"76356c476568424f4a38334761645a697957757344673d3d","sdkVer":29,"sn":"ca0e53edac957b8f6f187528933355f1","sysVersion":"2024-11-15 19:08:51_29_14.1_4.9.170","columnId":76182,"dataVersion":"pre34d022217-8b29-11f1-860c-e7ba14321033LiveDataV6","expireTimeStr":"1785953097","pageNum":1,"pageSize":3000,"userId":"169355704","userToken":"94f1ace7-bb6b-4a79-ab0e-a2df4d5bcebe"}`
+	body := `{"apkVersion":"` + appVer + `","appId":"com.android.msandroid","appLanguage":"es","b29":"4f6f786b4b5a7a3933666842554e6c55717338584b71325a3635436b4e463736583442714b345572434a504c556e72384136647252773d3d","contentType":"application/json;charset=utf-8","cpu":"armeabi-v7a","deviceToken":"","hardwareInfo":"sun50iw9p1","loginType":"2","model":"V76PRO","portalCode":"masnew","product":"walley","reserve1":"76356c476568424f4a38334761645a697957757344673d3d","sdkVer":29,"sn":"ca0e53edac957b8f6f187528933355f1","sysVersion":"2024-11-15 19:08:51_29_14.1_4.9.170","columnId":76182,"dataVersion":"pre34d022217-8b29-11f1-860c-e7ba14321033LiveDataV6","expireTimeStr":"` + exp + `","pageNum":1,"pageSize":3000,"userId":"` + uid + `","userToken":"` + tok + `"}`
 	// encrypt: hex( base64( 3DES_ECB_PKCS5(plaintext) ) ) with key base64-decoded
 	ct := threeDesECB([]byte(body))
 	wire := toHexBase64(ct)
@@ -116,4 +121,11 @@ func main() {
 		n, _ := uconn.Read(buf)
 		fmt.Println("H1 response:", string(buf[:n])[:600])
 	}
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }
