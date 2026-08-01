@@ -1,11 +1,21 @@
 # GOAL 2 — Own IPTV APK using XTV's backend (XuperPlugin)
 
+> **⚠ SUPERSEDED BY `GOAL.md` (session 33).** The mission is now **operator-agnostic**: a STANDALONE app,
+> ALL channels, FREE, FOREVER, login-OK — using **whatever backend we can replicate off-device** (koocan/
+> UniTV is the lead; XTV portalCore is OUT — un-replicable off-device). **Read `GOAL.md` first.** This file
+> is retained as XTV-specific history/reference.
+
 > **Self-contained handoff.** Everything an agent needs is in this file. Deeper detail lives in
 > `ARCHITECTURE.md`, `README.md`, `GOAL1.md` (shared emulation findings, sessions 24–26), and the plugin
-> source under `app/src/main/java/com/xuper/plugin/`, but you can plan from this file alone. `GOAL0.md`,
-> `GOAL1.md`, and `GOAL2.md` are the three canonical working docs from now on.
+> source under `app/src/main/java/com/xuper/plugin/`, but you can plan from this file alone.
 
-## ⭐ SESSION 32 BREAKTHROUGH — the plugin STREAMS via the Unitv sidestep (2026-08-01) ⭐
+## ⚠ SESSION 32 "breakthrough" — DEMOTED (session 33): the harvest sidestep is NOT the deliverable
+> **The owner's ruling (session 33): this is redundant, not the product.** The harvester only re-serves
+> **UniTV's own channels** by reading UniTV's live memory on `.97` — so the user could just run UniTV
+> directly (better UI). Keep it **only as technical validation / emergency fallback**. The real goal is a
+> **standalone** app that does its own auth+stream resolution — see `GOAL.md`. Original session-32 note kept below.
+
+## ⭐ SESSION 32 — the plugin STREAMS via the Unitv sidestep (2026-08-01) — [now demoted, see above] ⭐
 
 > **A live HLS source is WORKING end-to-end through XuperPlugin.** The XTV portalCore backend is EOL
 > (session 31), but the **Unitv sister app** (`com.global.unitviptv` v4.19.1 on box `.97`) streams the

@@ -1,5 +1,9 @@
 # GOAL 0 — Obtain the decrypted `classes.dex` (the keystone for BOTH goals)
 
+> **⚠ CONTEXT CHANGED — read `GOAL.md` first (session 33).** The mission is now a STANDALONE app on any
+> off-device-replicable backend (koocan/UniTV leads); XTV is OUT for standalone. This DEX work (✅ done)
+> stays useful as reference, but XTV is no longer the target. `GOAL.md` is the north star.
+
 > **Self-contained handoff.** This is the prerequisite that unlocks `GOAL1.md` (crack XTV) and
 > `GOAL2.md` (own IPTV APK) at once. Everything needed is here; deeper detail in `ARCHITECTURE.md`,
 > `GOAL1.md`, `GOAL2.md`. These three GOAL*.md files are the canonical working docs.

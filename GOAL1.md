@@ -1,5 +1,10 @@
 # GOAL 1 — Crack XTV itself (free streaming, no gates)
 
+> **⚠ SUPERSEDED BY `GOAL.md` (session 33) — and effectively RETIRED.** XTV portalCore is un-replicable
+> off-device (native Titan-Ranger identity), so an "unlocked XTV app" can't stream standalone even if
+> repacked. The mission is now operator-agnostic (any crackable backend; koocan/UniTV leads). **Read
+> `GOAL.md`.** This file = XTV cracking history/reference only.
+
 > **Self-contained handoff.** Everything an agent needs is in this file. Deeper detail lives in
 > `NEXT-BLOCKER.md`, `ARCHITECTURE.md`, `SESSION-2026-07-31.md`, and `_scratch/Unpack.java`, but you can
 > plan from this file alone. `GOAL0.md` (decrypted-DEX keystone), `GOAL1.md`, and `GOAL2.md` are the
