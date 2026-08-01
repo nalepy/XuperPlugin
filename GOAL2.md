@@ -14,10 +14,13 @@ turning XTV (`com.android.mgstv`) into an open **M3U/HLS source** playable in VL
 **The `portal200001` gate is an ORIGIN-LEVEL native-signed-token check (session 31), NOT a TLS/JA3 or
 h2-fingerprint block.** Session 31 proved the response is generated at the origin (Envoy/Google behind
 Cloudflare, not the CF edge), that any `apkVersion` value (up to 99999) is ignored, and that the gate
-keys on the encrypted `b29`/`reserve1` body tokens — which are minted by the Titan Ranger native layer
-under a key we don't have (they do NOT decrypt with the recovered body 3DES key). **You cannot beat it
-from Java/utls; you must either mint fresh native tokens (hook `qd.a.a.k()` inputs on the live app / reverse
-`NativeJni`+`SE.sd`) or sidestep portalCore entirely.** See the "Session 31" section for the full proof.
+keys on the encrypted `b29`/`reserve1` body tokens — which session 31 traced to **`b29 = enc(device
+serial)`, `reserve1 = enc(device MAC)`** (producer `ka/h.java:342` → `qd.a.a.k(...)`, raw values from
+`kb.f0.e()`/`d()`), native-encrypted under a key we don't have (they do NOT decrypt with the body 3DES
+key). Because these are **static device-identity** tokens (not per-request nonces), the session-30 replay
+failure is probably **`userToken`/`expireTimeStr`**, not b29 — so **try replaying `.4`'s static
+b29/reserve1 + a FRESH live userToken first** (cheap, may ship the plugin). Otherwise mint the tokens by
+hooking the live app or reversing `NativeJni`/`SE.sd`. See the "Session 31" section for the full proof.
 The pre-session-31 framing (a residual h2-framing diff) is superseded. Session 30's characterization,
 retained below:
 
@@ -229,11 +232,29 @@ v1.8.2 + `golang.org/x/net/http2`). `go build -o probe.exe . && ./probe.exe`. En
   `f`. Both are set once by the 10-arg setter `qd.a.a.k(loginType, appId, appVersion, sn, `**`reserve1`**`,
   deviceToken, appLanguage, sysVersion, portalCode, `**`b29`**`)` (arg5=reserve1, arg10=b29). **No Java
   computes them** — they are stored values fed IN to `k()`.
+- **PRODUCER PINNED — `ka/h.java:342`, method `E0()`:**
+  `qd.a.a.k(str, j2, valueOf, s2, `**`d2`**`, e2, language, l2, l3, `**`e3`**`)` where (by setter arg order)
+  **`reserve1 = d2 = kb.f0.d()`** (jadx comment `"getLocalMac()"`) and **`b29 = e3 = kb.f0.e()`** (jadx
+  comment `"getSerial()"`). So the two gated tokens are **the device MAC and the device serial** —
+  device-identity, NOT a version or per-request nonce.
+- `kb/f0.java` (in the d2 multidex) `d()`/`e()` read the RAW serial/MAC off the box (`Runtime.exec` /
+  `/proc`, parse the `"Serial"` line; jadx even bailed on `e()` — "Method not decompiled"). The RAW
+  values are then encrypted (to the 40 B / 16 B block-cipher blobs seen on the wire) by a **native
+  routine under a key that is NOT the recovered body 3DES key** — session-31 brute-forced b29/reserve1
+  against every interpretation of the body key (`b64dec`, ascii, `[:8]`/`[:24]`, ECB/CBC0) → all garbage.
+  The encryptor is native (Titan Ranger / `SE.sd @ 0x1203fc3d`).
 - The app's portalCore HTTP goes through **`com/titan/ranger/NativeJni.java`** (the `DoHttpSec` native
-  path). `b29`/`reserve1` originate in that native layer (Titan Ranger, decrypted inside `ijiami.dat`) —
-  consistent with them being encrypted under a native key. The `qd.a.a.k(...)` producer/caller was not
-  pinned this session (jadx renamed callers; `grep -F "qd.a.a.k("` finds no direct site — it's invoked
-  via an aliased singleton ref, likely in the login/init flow). **Finding that caller is the next lead.**
+  path), consistent with the native-key encryption.
+
+### SHARP NEW LEAD (session 31) — the replay failure may be `userToken`, not `b29`
+Because `b29`/`reserve1` are **encrypted device serial/MAC** (static per device — they do NOT rotate
+per request), the "app's byte-exact replay expires" symptom (session 30) is **unlikely to be caused by
+b29/reserve1**. The expiring component is far more likely **`userToken`** (`94f1ace7-…`, an account
+session token) and/or **`expireTimeStr`** in the body. This reopens a cheap path: pair `.4`'s **static**
+`b29`/`reserve1` (already captured) with a **FRESH** `userToken` pulled live from `.4`'s prefs/heap, plus
+`.4`'s exact `sn`/`model`/`userId`, and replay. If that passes, the plugin ships without cracking the
+native token crypto at all — it just needs `.4`'s two static device tokens once + a live userToken.
+**Test this before spending any tokens on native reversing.**
 
 ### Conclusion / reframing for the next agent
 The chain of proof is now: (1) TLS matches → not the gate; (2) CF forwards to origin → not a WAF/JA3
@@ -241,11 +262,14 @@ block; (3) any `apkVersion` incl. 99999 is ignored → not a version-number gate
 are native-key-encrypted tokens we can't forge or replay (the app's own byte-exact replay also expires,
 per session 30 → they carry a freshness/nonce/binding component). **Therefore the gate is a native-signed
 per-request token check.** You cannot beat it from Java/utls alone. The two live paths:
-- **(A) Reproduce the native token generation** — find `qd.a.a.k(...)`'s caller and the `NativeJni`/
-  `SE.sd @ 0x1203fc3d` routine (+ its key) that mints `b29`/`reserve1`. This likely needs the native
-  `.so` behavior (emulation `GOAL1.md`, or on-device hook of the k() inputs on rooted `.4`). Hooking the
-  **inputs to `qd.a.a.k()` on the live app** (Xposed/patched-app, since Frida is ptrace-blocked) would
-  hand you fresh valid tokens directly — cheaper than reversing the native crypto.
+- **(A) Reproduce the native token generation** — the producer is `ka/h.java:342` `E0()` calling
+  `qd.a.a.k(...)` with `b29 = kb.f0.e()` (serial) and `reserve1 = kb.f0.d()` (MAC), each then native-
+  encrypted (key = native, `SE.sd @ 0x1203fc3d` / Titan Ranger — NOT the body 3DES key). To mint valid
+  tokens: hook the **final encrypted `B29`/`reserve1` values** (e.g. at `ld/b.java` `a()` where they're
+  added to the JSON, or the `qd.a.a.d()`/`h()` getters) on the live app to read `.4`'s exact wire tokens;
+  OR reverse the native encryptor via emulation (`GOAL1.md`). Frida is ptrace-blocked → use Xposed or a
+  patched app for the on-device hook. **But try the "sharp new lead" (userToken) FIRST — it may make this
+  unnecessary.**
 - **(B) Sidestep portalCore entirely** — reuse the app's live session (playlist path + d/s/t cookies)
   from the rooted box; the playlist+segment tiers are open. Streams today; refresh before ~30 min expiry.
 
