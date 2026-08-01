@@ -38,3 +38,12 @@ Write `fib.py` (iterative `fib(n)`, print `fib(20)`, `assert fib(20)==6765`), ru
   pro variants; the telelatino PRO worker is the live example).
 - Token counts are a proxy (out_chars/4), not API-verified usage.
 - `claude-frontier` (Anthropic) was intentionally excluded — it's the expensive reference, not a worker.
+
+## claude-frontier — PENDING (session-limited)
+The consumer **Pro** account (OAuth, `.credentials.json`) is **session-limited** (resets ~3:40pm
+America/Asunción). Valid frontier model ids on this account: `opus`, `sonnet`, `haiku`, `claude-opus-5`
+(specific-version ids like `opus-4.8`/`sonnet-5`/`haiku-4.5` are NOT valid here — use the short aliases).
+IMPORTANT: the deepseek env vars (`ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic` +
+`ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_MODEL`) route `claude` to deepseek and OVERRIDE OAuth — to hit the
+Pro account you must `env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_MODEL claude …`.
+Re-run the 4 frontier rows via `_bench/frontier-*.sh` (or the loop in this doc) after the limit resets.
