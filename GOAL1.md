@@ -16,6 +16,20 @@ posture: treat Goal 1 as secondary. If you want live streams on your own terms s
 (own-APK using XTV's backend) is the far more reachable path** and shares most of the same intel.
 Pursue Goal 1 only if the deliverable specifically must be "the original XTV app, unlocked."
 
+> **⛔ SESSION 33 UPDATE — XTV portalCore is confirmed un-replicable off-device (two independent proofs);
+> the client-side-patch premise is undercut.** The sibling FakeUniTV agent (`Workspace/FakeUnitv/`,
+> snapshot in `_session/fakeunitv_intel/`) independently reproduced GOAL2's Route-0 result: even with the
+> b29/reserve1 crypto fully cracked (`mint_tokens.py` — key `base64decode("2b494e53756c`**`77`**`4c…")`,
+> b29=enc(SN)/reserve1=enc(userId)) plus a fresh userToken and exact TLS/h2, XTV portalCore **still returns
+> `portal200001`** — it additionally requires the **native Titan-Ranger DoHttpSec connection identity**.
+> Implication for Goal 1: patching the client-side gates (email/update/VIP) in the DEX does NOT restore a
+> standalone streamable app, because the server auth path is bound to the packer's native layer you'd have
+> to keep intact anyway. The reachable streaming outcome is **GOAL2's harvest sidestep (already ships)** or
+> a **koocan/UniTV standalone client** (a *different*, non-ijiami backend that DOES accept off-device
+> clients — see `GOAL2.md` Session 33). Goal 1's "unlocked original XTV app" remains blocked by the ijiami
+> repack wall AND this native-auth binding; treat as effectively superseded unless that exact deliverable
+> is mandatory.
+
 ## *** PIVOT (session 28): the decrypted DEX is now IN HAND — the emulation grind is no longer required to get it ***
 The `.4` live-memory carve (see `GOAL0.md`) **succeeded** — the decrypted app DEX was pulled from process
 memory and decompiled with jadx, bypassing the whole `N.l→true` wall. The entire emulation effort below
