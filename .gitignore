@@ -40,6 +40,7 @@ _session/*.png
 _session/*.xml
 _session/*.txt
 _session/*.json
+_session/*.csv
 _session/*.py
 _session/*.sh
 _session/alldump
