@@ -91,6 +91,12 @@ The DEX revealed the whole portalCore request pipeline from the app's own code:
   do NOT decrypt with the recovered body 3DES key. Beat it only by minting fresh native tokens (hook
   `qd.a.a.k()` inputs on the live app, or reverse the native crypto) or by sidestepping portalCore. Full
   proof: `GOAL2.md` Session 31.
+- **UPDATE (session 31 round 4): replication is FUTILE — the REAL app is EOL too.** Forced a fresh app
+  session on `.4` and read its own analytics DB (`BBDatabase.db`): the app **does not stream** (138
+  `play_error` vs 3 `play_program`; fresh launch → `play_error`; its `app_api` calls return **403** on
+  `/epg/v2/live/...`). So `portal200001` is a **global version/account EOL**, not a client gap. New GOAL2
+  direction: get a **newer accepted app build** and/or **renew the account** before any request-replication
+  work. Detail: `GOAL2.md` "Session 31 round 3/4" + the top verdict banner.
 
 ### Goal 1 targets — still pending (decompiled sources now local)
 - The gate-check search (email-reg / forced-update / VIP-payment) is NOT done yet. The decompiled
