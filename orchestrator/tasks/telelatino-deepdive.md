@@ -35,3 +35,13 @@ Is TeleLatino's `portal200001` a **version-gate we can beat off-device** (right 
 Update `backends/telelatino/FINDINGS.md`: the verdict (version-gate beatable vs identity-gate dead), the
 live host + accepted version + keys if found, any `returnCode:0` reached, channel count + play-URL format,
 and a `telelatino_probe.py` that reproduces. Then stop. If BEATABLE, say so loudly — it becomes the plan.
+
+## UPDATE (session 33b) — creds available, CONTINUE
+- **FREE account (works, streams free channels NOW):** `nestor.ale@gmail.com` / `Ian20jesus` — in `orchestrator/.env` as `TELELATINO_USER`/`TELELATINO_PASS` (gitignored). Read them from there.
+- The owner is ALSO hunting a **newer TeleLatino APK** (post-2026-07-09) in parallel — if one appears, that's the cleanest version-gate unlock.
+- **Resume from your FINDINGS:** you proved getAddr/EPG/notice pass off-device and portalCore is a VERSION whitelist. Now:
+  1. **Login off-device with the free creds** → getAuthInfo → does portalCore now return `returnCode:0` (i.e. is the gate a *login*-gated whitelist, not just version)? 
+  2. Capture the **3DES response keys** from the box memory (the last unknown).
+  3. Pull the **FREE channel list** + one live `.m3u8`/`.ts` end-to-end off-device → ffprobe it.
+  4. If a newer APK exists, diff its versionCode/whitelist handling.
+- Commit findings + working code to your branch, push, PR.
