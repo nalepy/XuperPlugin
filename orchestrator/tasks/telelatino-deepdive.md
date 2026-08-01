@@ -45,3 +45,16 @@ and a `telelatino_probe.py` that reproduces. Then stop. If BEATABLE, say so loud
   3. Pull the **FREE channel list** + one live `.m3u8`/`.ts` end-to-end off-device → ffprobe it.
   4. If a newer APK exists, diff its versionCode/whitelist handling.
 - Commit findings + working code to your branch, push, PR.
+
+## UPDATE (session 33c) — NEWER APK available, test it
+- **Newer build staged:** `_session/apks/Xuper_com.msandroid.mobile_v6.2.3_(60203).apk` in your worktree.
+  Package `com.msandroid.mobile`, **versionCode 60203** (vs TeleLatino 54608), Bangcle-packed (same packer
+  you handle), built 2026-05-14. This is the family's newer msandroid build.
+- **Test it as the version-gate unlock:** extract its `versionCode`/`spkgVer`, and probe the portalCore
+  version whitelist with THIS build's identity (either install on `.4` and capture, or replicate its
+  version fields off-device). Does `portal200001` clear with 60203? Note: its build date (May-14) predates
+  TeleLatino's Jul-09 build — so if the whitelist is build-date-based it may STILL fail; report which.
+- **Parallel:** keep the free-account login test (`nestor.ale@gmail.com` / creds in `orchestrator/.env`)
+  — a login may clear the gate regardless of version.
+- Your deliverable is unchanged + now: **which combination (new version 60203, free login, or both) yields a
+  `returnCode:0` portalCore + a live `.m3u8`?**
