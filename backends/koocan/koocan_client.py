@@ -24,10 +24,20 @@ Boot flow (from com.mobile.brasiltv.f.b.u CloudStream task):
     DCS getAddr -> snToken -> SN=md5(snToken+"cloudstream") -> activate/login
 Usage:
     python3 koocan_client.py dcs            # DCS getAddr -> portal hosts
-    python3 koocan_client.py sn            # snToken (needs -H portal host)
-    python3 koocan_client.py activate      # activate device (needs sn/snToken)
-    python3 koocan_client.py authinfo      # getAuthInfo
-    python3 koocan_client.py slb           # getSlbInfo v5
+    python3 koocan_client.py chain          # full chain; stops at the first gate
+    python3 koocan_client.py sn             # snToken (needs -H portal host)
+    python3 koocan_client.py activate       # activate device (needs sn/snToken)
+    python3 koocan_client.py authinfo       # getAuthInfo
+    python3 koocan_client.py slb            # getSlbInfo v5
+
+STATUS (2026-08-01, Phase A worker): DCS getAddr works off-device (SN-keyed) and
+resolves the live portal hosts (mgdcs.jhwi1elw.com / ouwfg.hzmono.com). Every
+portalCore call (snToken/active/login/getAuthInfo/getSlbInfo/...) is hard-gated
+with {"returnCode":"portal200001","errorMessage":"版本已停止使用"} for ALL
+identity/version/body/transport variants — the same native Titan-Ranger
+connection-identity gate as XTV. The Java 3DES request path (this client) is
+accepted (HTTP 200 + structured JSON) but the origin rejects it at the
+connection level. See backends/koocan/FINDINGS.md + NEEDS.md.
 """
 
 import argparse
@@ -125,6 +135,18 @@ def des_decrypt_ecb_nopad_hex(data_hex: str, key: bytes, plain_len: int) -> str:
     return raw[:keep].decode("utf-8", "replace")
 
 
+def des3_encrypt_pkcs5(plain: str, key_str: str) -> str:
+    """portalCore/MMS request body encrypt -> hex(base64(3DES-ECB-PKCS5)).
+    Faithful to com.brasiltv.a.b.b.a(): 3DES -> standard base64 (newlines
+    stripped) -> per-char lowercase hex (com.brasiltv.a.b.a.b)."""
+    from Crypto.Cipher import DES3
+    from Crypto.Util.Padding import pad
+    data = pad(plain.encode("utf-8"), 8)
+    cipher = DES3.new(des3_key(key_str), DES3.MODE_ECB)
+    b64 = base64.b64encode(cipher.encrypt(data)).decode("ascii")
+    return b64.encode("utf-8").hex()
+
+
 def des3_decrypt_pkcs5(data_hex: str, key_str: str) -> str:
     """portalCore/MMS response data decrypt:
     hex -> utf8 string -> app base64 decode -> 3DES/ECB/PKCS5"""
@@ -160,6 +182,20 @@ RESPONSE_KEY_SUBS = "NxZZ7EYgaJiJSBHjnq7sDxYvYRm32tPQ"
 
 PORTAL_CODE = "koocanmobile2"
 LANG = "1"  # 1=pt/zh, 2=zh-hant, 3=en
+
+# Device-fingerprint fields merged into every portalCore body
+# (mobile.com.requestframe.f.a.b() — the CommonParams interceptor)
+COMMON_PARAMS = {
+    "loginType": "3",
+    "appLanguage": "en",
+    "apkVersion": int(APK_VER),
+    "sysVersion": "5.1.1",           # Build.VERSION.RELEASE on the fake-app device
+    "appId": APK,
+    "hardwareInfo": "rk30board",
+    "model": "V88",
+    "product": "rk322x_box",
+    "cpu": "armeabi-v7a",
+}
 
 
 def base_headers():
@@ -211,9 +247,20 @@ def dcs_get_addr(sn: str, mac: str = "", host: str = None):
     return None
 
 
+def _portal_body(bean: dict) -> str:
+    """Merge CommonParams into the bean and 3DES-wrap -> hex body string."""
+    merged = dict(COMMON_PARAMS)
+    for k, v in bean.items():
+        if v is not None:
+            merged[k] = v
+    json_str = json.dumps(merged, separators=(",", ":"), ensure_ascii=False)
+    return des3_encrypt_pkcs5(json_str, DES3_KEY_RESP)
+
+
 def portal_call(host: str, path: str, bean: dict, key_str: str = DES3_KEY_RESP):
-    """Generic portalCore POST with plain JSON body, 3DES response."""
-    body = json.dumps(bean, separators=(",", ":"), ensure_ascii=False)
+    """Generic portalCore POST — body = hex(base64(3DES(commonParams+bean))),
+    response data field decrypted with the same 3DES key."""
+    body = _portal_body(bean)
     st, text, hdrs = http_post(host + path, body)
     print(f"[portal] POST {host}{path} -> {st}")
     if st != 200:
@@ -234,7 +281,9 @@ def portal_call(host: str, path: str, bean: dict, key_str: str = DES3_KEY_RESP):
 
 
 def sn_token(host: str):
-    body = None
+    """POST /api/portalCore/snToken — no bean (empty body still gets
+    CommonParams merged + 3DES-wrapped by the app's interceptor)."""
+    body = _portal_body({})
     st, text, hdrs = http_post(host + "/api/portalCore/snToken", body)
     print(f"[sn] POST {host}/api/portalCore/snToken -> {st}")
     if st != 200:
@@ -293,6 +342,68 @@ def mms_login(host: str, user: str, pwd: str, terminal_id: str, mac: str = ""):
     return portal_call(host, "/api/MMS/terminal/login", bean)
 
 
+def resolve_portal_hosts(sn: str, mac: str = ""):
+    """getAddr -> (primary, backup) portal base URLs from dcsClientUrl.
+    SN-keyed: unknown SNs get 404 (device must be registered with the backend)."""
+    r = dcs_get_addr(sn, mac)
+    if not r or r.get("returnCode") != "0":
+        print("[resolve] getAddr failed — no portal hosts")
+        return []
+    urls = [u for u in (r.get("dcsClientUrl") or "").split("|") if u]
+    print(f"[resolve] portal hosts: {urls}")
+    return urls
+
+
+def run_chain(sn: str, mac: str = "AA:BB:CC:DD:EE:FF", host: str = None):
+    """Full off-device auth chain: getAddr -> snToken -> activate -> authInfo
+    -> slb -> columns. Stops at the first hard gate and reports where."""
+    print("=== koocan chain step 1/5: DCS getAddr (resolve portal host) ===")
+    hosts = resolve_portal_hosts(sn, mac) if not host else [host]
+    if not hosts:
+        print("[chain] STOP: no portal host (SN unknown to DCS?)")
+        return False
+    portal = hosts[0]
+
+    print("=== step 2/5: snToken -> SN=md5(snToken+cloudstream) -> active ===")
+    stok = sn_token(portal)
+    if not stok or stok.get("returnCode") != "0":
+        print(f"[chain] STOP at snToken: {stok}")
+        return False
+    sn_token_val = stok.get("data", {}).get("snToken") or stok.get("snToken")
+    if not sn_token_val:
+        print(f"[chain] snToken response has no snToken value: {stok}")
+        return False
+    sn2 = hashlib.md5((sn_token_val + "cloudstream").encode()).hexdigest()
+    print(f"[chain] SN = md5(snToken + cloudstream) = {sn2}")
+    act = activate(portal, sn2, sn_token_val, mac)
+    if not act or act.get("returnCode") != "0":
+        print(f"[chain] STOP at active: {act}")
+        return False
+
+    print("=== step 3/5: getAuthInfo + getSlbInfo (v5) ===")
+    uid = act.get("data", {}).get("userId") or act.get("userId")
+    utok = act.get("data", {}).get("userToken") or act.get("userToken")
+    print(f"[chain] userId={uid} userToken={utok}")
+    ai = get_auth_info(portal, utok, uid)
+    if not ai or ai.get("returnCode") != "0":
+        print(f"[chain] STOP at getAuthInfo: {ai}")
+        return False
+    slb = get_slb_info(portal, utok, uid, sn2)
+    if not slb or slb.get("returnCode") != "0":
+        print(f"[chain] STOP at getSlbInfo: {slb}")
+        return False
+
+    print("=== step 4/5: getColumnContents / getLiveData (channel list) ===")
+    cols = get_column_contents(portal, utok, uid)
+    if not cols or cols.get("returnCode") != "0":
+        print(f"[chain] STOP at getColumnContents: {cols}")
+        return False
+
+    print("=== step 5/5: fetch a live .m3u8 + .ts ===")
+    print("[chain] chain reached stream stage (m3u8 fetch not yet wired)")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -300,9 +411,9 @@ def mms_login(host: str, user: str, pwd: str, terminal_id: str, mac: str = ""):
 def main():
     p = argparse.ArgumentParser(description="koocan fake-UniTV off-device client")
     p.add_argument("cmd", choices=["dcs", "sn", "activate", "login", "authinfo",
-                                   "slb", "columns", "mmslogin", "dcs-test"])
+                                   "slb", "columns", "mmslogin", "dcs-test", "chain"])
     p.add_argument("-H", "--host", help="portal host (default: DCS-resolved or portalcore.koocan.com)")
-    p.add_argument("--sn", default="", help="device SN")
+    p.add_argument("--sn", default="147107feb03d65bf30773f8b604642cb", help="device SN (default: box SN)")
     p.add_argument("--sntoken", default="", help="SN token")
     p.add_argument("--mac", default="AA:BB:CC:DD:EE:FF")
     p.add_argument("-u", "--user", default="")
@@ -335,6 +446,10 @@ def main():
                 print("decrypted:", dec)
             except Exception as e:
                 print("decrypt err:", e)
+        return
+
+    if args.cmd == "chain":
+        run_chain(args.sn, args.mac, args.host)
         return
 
     host = args.host or PORTAL_CORE[0]
