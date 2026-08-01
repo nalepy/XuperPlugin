@@ -36,8 +36,13 @@ MS_SPKG = "2026-05-14 00:00:00_29_14.1_4.9.170"  # guessed; real value from devi
 MS_SN = TL_SN  # same physical box would have same SN
 
 # ── Account ─────────────────────────────────────────────────────────────────
-USER = "nestor.ale@gmail.com"
-PASS = "Ian20jesus"
+# Creds in orchestrator/.env (gitignored) as TELELATINO_USER/TELELATINO_PASS
+import os as _os
+import sys as _sys
+USER = _os.environ.get("TELELATINO_USER", "")
+PASS = _os.environ.get("TELELATINO_PASS", "")
+if not USER or not PASS:
+    _sys.exit("ERROR: Set TELELATINO_USER and TELELATINO_PASS env vars. Source orchestrator/.env first.")
 
 # ── Hosts ───────────────────────────────────────────────────────────────────
 PORTAL_HOST = "http://emowvv.dqiswip4.xyz"
