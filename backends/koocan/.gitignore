@@ -1,0 +1,7 @@
+# build artifacts / captures / secrets — keep out of git
+vmread
+*.pcap
+*.ts
+*_cookie*.txt
+__pycache__/
+runs/

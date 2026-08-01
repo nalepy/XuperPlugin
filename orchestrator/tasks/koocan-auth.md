@@ -4,10 +4,16 @@ You are a worker agent in an isolated git worktree on branch `koocan-auth`, off 
 XuperPlugin repo. Orchestrator coordinates via git — commit small, push your branch, do NOT touch
 `master`. Read `GOAL.md` (north star) and `GOAL2.md` "Session 33" first.
 
+## Runtime environment
+- Boxes: **`.4` is the reliable rooted device — prefer it.** `.97` is flaky (avoid). Ubuntu `.40` is alive
+  (`ssh xtv40`) if you need a Linux host. But this task is **off-device** — only touch a box if you must
+  read a value (e.g. a SN); do NOT build a memory-harvest.
+- You MAY spawn your own kimi subagents for parallel sub-steps if it helps. Keep everything on your branch.
+
 ## Context (already proven)
-- Tools + intel are in `_session/fakeunitv_intel/` — especially `koocan_client.py` (full DES/3DES crypto
-  + koocan endpoints) and `mint_tokens.py`.
-- PROVEN working off-device: `python3 _session/fakeunitv_intel/koocan_client.py dcs-test --sn <SN>` →
+- Tools + intel are in `backends/koocan/` (tracked) — especially `koocan_client.py` (full DES/3DES crypto
+  + koocan endpoints) and `mint_tokens.py`. (Full live cookies/binaries: untracked `_session/fakeunitv_intel/`.)
+- PROVEN working off-device: `python3 backends/koocan/koocan_client.py dcs-test --sn <SN>` →
   `getAddr` returns `{"returnCode":"0","dcsClientUrl":"...","errorMessage":"success!"}`. koocan accepts
   off-device clients (no version-gate, no native identity) — unlike XTV.
 
@@ -27,8 +33,8 @@ Ordered steps (extend `koocan_client.py`; keep it runnable, commit after each wo
 ## Constraints
 - Off-device only (run from this box). Do NOT depend on the `.97`/`.4` boxes or any memory-harvest —
   that path is explicitly demoted (see `GOAL.md`).
-- If a koocan account is required, STOP and write what's needed to `orchestrator/runs/koocan-auth.needs`
-  (the orchestrator will get credentials from the owner). Do not guess/brute credentials.
+- If a koocan account is required, STOP and write what's needed to `backends/koocan/NEEDS.md` on your
+  branch, commit it (the orchestrator will get credentials from the owner). Do not guess/brute credentials.
 - Commit working increments to branch `koocan-auth` with clear messages; push the branch. Do not merge.
 
 ## Deliverable
