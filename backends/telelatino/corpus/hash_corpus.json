@@ -1,0 +1,1072 @@
+{
+ "verdict": "NOT DERIVABLE for human-named channels; IDENTITY for coded channels",
+ "ground_truth": [
+  {
+   "channel_code": "cyx-Cinemax",
+   "cdn_hash": "C9EB0B2644979328E598EAFED311",
+   "confidence": "HIGH",
+   "source": "STANDALONE-RECIPE.md (BBDatabase.db on .4)"
+  },
+  {
+   "channel_code": "cyx-LaRedHD",
+   "cdn_hash": "1F3251F9425197449B94E006D8EB",
+   "confidence": "HIGH",
+   "source": "STANDALONE-RECIPE.md + heap play-response JSON (program/media) + peer_cap m3u8 segments"
+  },
+  {
+   "channel_code": "cyx-SyfyHD",
+   "cdn_hash": "F94D98EB4360be8eA43C337FF832",
+   "confidence": "HIGH",
+   "source": "heap_small.bin clean channel record (name/code/name + icon + signed URL media_code)"
+  }
+ ],
+ "identity_channels_from_heap": [
+  {
+   "name": "3ABN LATINO HD",
+   "channel_code": "cyx_DCCFFB2CC9211F50B",
+   "media_code": "cyx_DCCFFB2CC9211F50B"
+  },
+  {
+   "name": "A+ HD",
+   "channel_code": "cyx_2CE5F141794CF74C3ECE171",
+   "media_code": "cyx_2CE5F141794CF74C3ECE171"
+  },
+  {
+   "name": "A3 CINEMA HD",
+   "channel_code": "cyx_5AA797C17FC8AFBE6B32C3",
+   "media_code": "cyx_5AA797C17FC8AFBE6B32C3"
+  },
+  {
+   "name": "ABC 10 MIAMI HD",
+   "channel_code": "cyx_1E470B1A1466C40EF4F1CE33",
+   "media_code": "cyx_1E470B1A1466C40EF4F1CE33"
+  },
+  {
+   "name": "ABC TV PY HD",
+   "channel_code": "cyx_67673B12B8BDB756EDB682F5",
+   "media_code": "cyx_67673B12B8BDB756EDB682F5"
+  },
+  {
+   "name": "ABE INTERNACIONAL BO HD",
+   "channel_code": "cyx_0E3F9488AB15D9CD40D",
+   "media_code": "cyx_0E3F9488AB15D9CD40D"
+  },
+  {
+   "name": "ABYA YALA TV",
+   "channel_code": "cyx_80D4B491D8C2B169A4011F7",
+   "media_code": "cyx_80D4B491D8C2B169A4011F7"
+  },
+  {
+   "name": "BOING TV HD",
+   "channel_code": "cyx_E7A902D4BAF56D01715940",
+   "media_code": "cyx_E7A902D4BAF56D01715940"
+  },
+  {
+   "name": "CAMARA DE DIPUTADOS CHILE HD",
+   "channel_code": "cyx_7BC3766AEA3F2C56EBCF32F",
+   "media_code": "cyx_7BC3766AEA3F2C56EBCF32F"
+  },
+  {
+   "name": "CANAL 11 CR HD",
+   "channel_code": "cyx_575D416387F6F1F68CDE6921",
+   "media_code": "cyx_575D416387F6F1F68CDE6921"
+  },
+  {
+   "name": "CANAL 21 SV HD",
+   "channel_code": "cyx_FB7CD5F7E4EE44D9D5B25887",
+   "media_code": "cyx_FB7CD5F7E4EE44D9D5B25887"
+  },
+  {
+   "name": "CANAL 4 NIC HD",
+   "channel_code": "cyx_33BEC243D0F0B446684",
+   "media_code": "cyx_33BEC243D0F0B446684"
+  },
+  {
+   "name": "CANAL 4 RD HD",
+   "channel_code": "cyx_BBFCF3AB8813907D",
+   "media_code": "cyx_BBFCF3AB8813907D"
+  },
+  {
+   "name": "CANAL 6 CR HD",
+   "channel_code": "cyx_65EFDA6B0298F0B47125BFE",
+   "media_code": "cyx_65EFDA6B0298F0B47125BFE"
+  },
+  {
+   "name": "CANAL 6 HN HD",
+   "channel_code": "cyx_EA19AB4D3CD9C9D2D2B661FD",
+   "media_code": "cyx_EA19AB4D3CD9C9D2D2B661FD"
+  },
+  {
+   "name": "CANAL 6 NI HD",
+   "channel_code": "cyx_ADD0ED0B66029BA83D",
+   "media_code": "cyx_ADD0ED0B66029BA83D"
+  },
+  {
+   "name": "CANAL 6 SV HD",
+   "channel_code": "cyx_AA0492A7B61CA7A5F7BE9DE0",
+   "media_code": "cyx_AA0492A7B61CA7A5F7BE9DE0"
+  },
+  {
+   "name": "CANAL 9 NIC HD",
+   "channel_code": "cyx_CA32A98626848B6B74972B4",
+   "media_code": "cyx_CA32A98626848B6B74972B4"
+  },
+  {
+   "name": "CANAL GOL HD",
+   "channel_code": "cyx_2EF80C97E365E28ADDFCE85C",
+   "media_code": "cyx_2EF80C97E365E28ADDFCE85C"
+  },
+  {
+   "name": "CAPITAL FHD",
+   "channel_code": "cyx_47278295633894973379764",
+   "media_code": "cyx_47278295633894973379764"
+  },
+  {
+   "name": "CDN SPORTSMAX RD HD",
+   "channel_code": "cyx_B5C7A6B54A0F7A80A4F",
+   "media_code": "cyx_B5C7A6B54A0F7A80A4F"
+  },
+  {
+   "name": "CINEVISION CANAL 19 RD HD",
+   "channel_code": "cyx_D02CD5CCF2B38F97AB4",
+   "media_code": "cyx_D02CD5CCF2B38F97AB4"
+  },
+  {
+   "name": "COLOR VISION RD HD",
+   "channel_code": "cyx_A33C97A867F16B555",
+   "media_code": "cyx_A33C97A867F16B555"
+  },
+  {
+   "name": "Canal CUBA VISION",
+   "channel_code": "cyx_6EF84B484B2BD358BFE",
+   "media_code": "cyx_6EF84B484B2BD358BFE"
+  },
+  {
+   "name": "Canal ORBITA TV SV",
+   "channel_code": "cyx_F0B8BAC146437ACC3D",
+   "media_code": "cyx_F0B8BAC146437ACC3D"
+  },
+  {
+   "name": "Canal WOW SV",
+   "channel_code": "cyx_30627972291822192783894013",
+   "media_code": "cyx_30627972291822192783894013"
+  },
+  {
+   "name": "Canal i",
+   "channel_code": "cyx_FD11F9488880C4F7DF03BDD3",
+   "media_code": "cyx_FD11F9488880C4F7DF03BDD3"
+  },
+  {
+   "name": "ChileVision HD",
+   "channel_code": "cyx_B669C6B623C919F6CFA163AF",
+   "media_code": "cyx_B669C6B623C919F6CFA163AF"
+  },
+  {
+   "name": "Congreso HD",
+   "channel_code": "cyx_8873A26A822F41B7C8D80E",
+   "media_code": "cyx_8873A26A822F41B7C8D80E"
+  },
+  {
+   "name": "D GAMES ECUADOR HD",
+   "channel_code": "cyx_BAD08CBF19876B0CE2D6210",
+   "media_code": "cyx_BAD08CBF19876B0CE2D6210"
+  },
+  {
+   "name": "D GAMES ECUADOR HD OPC",
+   "channel_code": "cyx_C77F665D9665387996E03DF",
+   "media_code": "cyx_C77F665D9665387996E03DF"
+  },
+  {
+   "name": "ESTADIO TNT SPORTS",
+   "channel_code": "cyx_053453F405BE0EE2B020FAE5",
+   "media_code": "cyx_053453F405BE0EE2B020FAE5"
+  },
+  {
+   "name": "Ecuavisa Sierra HD",
+   "channel_code": "cyx_2BDE021D98772C56A9B6C3706",
+   "media_code": "cyx_2BDE021D98772C56A9B6C3706"
+  },
+  {
+   "name": "El canal del futbol Ecuador opc",
+   "channel_code": "cyx_9C33652AFCF28A3E997",
+   "media_code": "cyx_9C33652AFCF28A3E997"
+  },
+  {
+   "name": "Eventos Fut Bolivia",
+   "channel_code": "cyx_6F50237401D0DA47139B6E5",
+   "media_code": "cyx_6F50237401D0DA47139B6E5"
+  },
+  {
+   "name": "FOX ONE",
+   "channel_code": "cyx_A4C363F00DD17F7A4",
+   "media_code": "cyx_A4C363F00DD17F7A4"
+  },
+  {
+   "name": "Fish TV",
+   "channel_code": "cyx_287737964242140985866",
+   "media_code": "cyx_287737964242140985866"
+  },
+  {
+   "name": "Formula 1 PC",
+   "channel_code": "cyx_8FA89827534EABB21C986F30",
+   "media_code": "cyx_8FA89827534EABB21C986F30"
+  },
+  {
+   "name": "GLOBOVISION",
+   "channel_code": "cyx_8F45100BA2E4995A6E9816",
+   "media_code": "cyx_8F45100BA2E4995A6E9816"
+  },
+  {
+   "name": "HCH HN HD",
+   "channel_code": "cyx_481E05081BAE50D8157A9FFF",
+   "media_code": "cyx_481E05081BAE50D8157A9FFF"
+  },
+  {
+   "name": "HOSSANA VISION HD",
+   "channel_code": "cyx_312F64576FF6F59B20BC0",
+   "media_code": "cyx_312F64576FF6F59B20BC0"
+  },
+  {
+   "name": "IPE HD",
+   "channel_code": "cyx_5C1DC129CBDACE3F2EC9AAD7",
+   "media_code": "cyx_5C1DC129CBDACE3F2EC9AAD7"
+  },
+  {
+   "name": "Karibena HD",
+   "channel_code": "cyx_716607AAA3722C5A130577",
+   "media_code": "cyx_716607AAA3722C5A130577"
+  },
+  {
+   "name": "LAS USA MEXICO",
+   "channel_code": "cyx_0E41C511DB91F9456A",
+   "media_code": "cyx_0E41C511DB91F9456A"
+  },
+  {
+   "name": "LUNA TV HD",
+   "channel_code": "cyx_79FBC32F9559FCF72",
+   "media_code": "cyx_79FBC32F9559FCF72"
+  },
+  {
+   "name": "Latina Noticias PE HD",
+   "channel_code": "cyx_B7A7B9CE0835C9E64",
+   "media_code": "cyx_B7A7B9CE0835C9E64"
+  },
+  {
+   "name": "MAS TV 23 HD",
+   "channel_code": "cyx_560702128041614537987674",
+   "media_code": "cyx_560702128041614537987674"
+  },
+  {
+   "name": "MICROVISION RD FHD",
+   "channel_code": "cyx_2B8C5CA8DC54BE8D",
+   "media_code": "cyx_2B8C5CA8DC54BE8D"
+  },
+  {
+   "name": "MICROVISION RD HD",
+   "channel_code": "cyx_2850292413248740573326",
+   "media_code": "cyx_2850292413248740573326"
+  },
+  {
+   "name": "MOTOR TREND HD",
+   "channel_code": "cyx_A6464727AB981AA0E6ABD7",
+   "media_code": "cyx_A6464727AB981AA0E6ABD7"
+  },
+  {
+   "name": "MOVISTAR CLASICOS HD",
+   "channel_code": "cyx_688228BC50E47AD68363310",
+   "media_code": "cyx_688228BC50E47AD68363310"
+  },
+  {
+   "name": "MOVISTAR COMEDIA HD",
+   "channel_code": "cyx_F38B8D5E68C2D6F49D6B95",
+   "media_code": "cyx_F38B8D5E68C2D6F49D6B95"
+  },
+  {
+   "name": "MOVISTAR F1 HD",
+   "channel_code": "cyx_A99E1DF07D30488C85DDC0",
+   "media_code": "cyx_A99E1DF07D30488C85DDC0"
+  },
+  {
+   "name": "MOVISTAR FUTBOL HD",
+   "channel_code": "cyx_235320396019967157182116",
+   "media_code": "cyx_235320396019967157182116"
+  },
+  {
+   "name": "MOVISTAR SERIES 2 HD",
+   "channel_code": "cyx_CC610119D5C489B77B6395",
+   "media_code": "cyx_CC610119D5C489B77B6395"
+  },
+  {
+   "name": "MULTIMEDIOS USA",
+   "channel_code": "cyx_04236432823522506947467",
+   "media_code": "cyx_04236432823522506947467"
+  },
+  {
+   "name": "MYTIME MOVIE NETWORK HD",
+   "channel_code": "cyx_DD6F3D0C20FA0ADE3F56A4D",
+   "media_code": "cyx_DD6F3D0C20FA0ADE3F56A4D"
+  },
+  {
+   "name": "Majestad TV",
+   "channel_code": "cyx_63946847085511908425611525",
+   "media_code": "cyx_63946847085511908425611525"
+  },
+  {
+   "name": "Mega ESP HD",
+   "channel_code": "cyx_6E50AB075CA55CA0257E778A",
+   "media_code": "cyx_6E50AB075CA55CA0257E778A"
+  },
+  {
+   "name": "Meridiano TV HD",
+   "channel_code": "cyx_398395783742664202732948",
+   "media_code": "cyx_398395783742664202732948"
+  },
+  {
+   "name": "Mexican Pacific League1 HD",
+   "channel_code": "cyx_0303C8D3036E3B59",
+   "media_code": "cyx_0303C8D3036E3B59"
+  },
+  {
+   "name": "Mexican Pacific League2 HD",
+   "channel_code": "cyx_5DE9807450C38D15",
+   "media_code": "cyx_5DE9807450C38D15"
+  },
+  {
+   "name": "NBC Chicago Sports 2 HD",
+   "channel_code": "cyx_6DA39AFCC7929CC0D2689064",
+   "media_code": "cyx_6DA39AFCC7929CC0D2689064"
+  },
+  {
+   "name": "NEOX HD",
+   "channel_code": "cyx_544808695394658",
+   "media_code": "cyx_544808695394658"
+  },
+  {
+   "name": "NESN Boston",
+   "channel_code": "cyx_DD60F7942005093DBC3D78F",
+   "media_code": "cyx_DD60F7942005093DBC3D78F"
+  },
+  {
+   "name": "NESN Plus",
+   "channel_code": "cyx_60B1C5546D2F7F754CC370A",
+   "media_code": "cyx_60B1C5546D2F7F754CC370A"
+  },
+  {
+   "name": "NFL PASS 01 HD",
+   "channel_code": "cyx_722E7D55C063E76B12604A8B",
+   "media_code": "cyx_722E7D55C063E76B12604A8B"
+  },
+  {
+   "name": "NFL PASS 02 HD",
+   "channel_code": "cyx_77090206BBF14097DB92EE47",
+   "media_code": "cyx_77090206BBF14097DB92EE47"
+  },
+  {
+   "name": "NFL PASS 03 HD",
+   "channel_code": "cyx_38E59C440E73383BDA76FB1E",
+   "media_code": "cyx_38E59C440E73383BDA76FB1E"
+  },
+  {
+   "name": "NFL PASS 04 HD",
+   "channel_code": "cyx_F2F322067E1ECF09D3E7C65D",
+   "media_code": "cyx_F2F322067E1ECF09D3E7C65D"
+  },
+  {
+   "name": "NFL PASS 05 HD",
+   "channel_code": "cyx_79B3C4FBA0030114D8167407",
+   "media_code": "cyx_79B3C4FBA0030114D8167407"
+  },
+  {
+   "name": "NFL PASS 06 HD",
+   "channel_code": "cyx_A5011418E9B1CB986ABABD56",
+   "media_code": "cyx_A5011418E9B1CB986ABABD56"
+  },
+  {
+   "name": "NFL PASS 07 HD",
+   "channel_code": "cyx_DF9CCB7307CBDEDDE7826DFE",
+   "media_code": "cyx_DF9CCB7307CBDEDDE7826DFE"
+  },
+  {
+   "name": "NFL PASS 08 HD",
+   "channel_code": "cyx_E4ACCB77306C68CD4DE114A9",
+   "media_code": "cyx_E4ACCB77306C68CD4DE114A9"
+  },
+  {
+   "name": "NFL PASS 09 HD",
+   "channel_code": "cyx_9DCAEA6EAB66C049BE927541",
+   "media_code": "cyx_9DCAEA6EAB66C049BE927541"
+  },
+  {
+   "name": "NFL PASS 10 HD",
+   "channel_code": "cyx_F873D8478D1A22CE044F0EBD",
+   "media_code": "cyx_F873D8478D1A22CE044F0EBD"
+  },
+  {
+   "name": "NFL PASS 12 HD",
+   "channel_code": "cyx_F60C14576E3110F1BF8FF303",
+   "media_code": "cyx_F60C14576E3110F1BF8FF303"
+  },
+  {
+   "name": "NFL PASS 13 HD",
+   "channel_code": "cyx_F4DB7251B99E99D26CC1FED0",
+   "media_code": "cyx_F4DB7251B99E99D26CC1FED0"
+  },
+  {
+   "name": "NHL HD",
+   "channel_code": "cyx_55F948DAA53F6BD25FA615F8",
+   "media_code": "cyx_55F948DAA53F6BD25FA615F8"
+  },
+  {
+   "name": "NSTV HD",
+   "channel_code": "cyx_8F404E79DC42305E22C86A",
+   "media_code": "cyx_8F404E79DC42305E22C86A"
+  },
+  {
+   "name": "NUEVO TIEMPO",
+   "channel_code": "cyx_78851548869403943",
+   "media_code": "cyx_78851548869403943"
+  },
+  {
+   "name": "Nativa TV",
+   "channel_code": "cyx_76625C1B2D323B5657AF3",
+   "media_code": "cyx_76625C1B2D323B5657AF3"
+  },
+  {
+   "name": "ODTV 2",
+   "channel_code": "cyx_9F3F43B237E05D94A6",
+   "media_code": "cyx_9F3F43B237E05D94A6"
+  },
+  {
+   "name": "PAT BO HD",
+   "channel_code": "cyx_3B03763A3A4E1D816087798F",
+   "media_code": "cyx_3B03763A3A4E1D816087798F"
+  },
+  {
+   "name": "REY TV HD",
+   "channel_code": "cyx_390B47798B6CF3D66C013",
+   "media_code": "cyx_390B47798B6CF3D66C013"
+  },
+  {
+   "name": "RPP NOTICIAS TV HD",
+   "channel_code": "cyx_13E3C2E5BA362FB812E3EE",
+   "media_code": "cyx_13E3C2E5BA362FB812E3EE"
+  },
+  {
+   "name": "Rock And Pop HD",
+   "channel_code": "cyx_70C0EB939F516402D85",
+   "media_code": "cyx_70C0EB939F516402D85"
+  },
+  {
+   "name": "SERTV PAN HD",
+   "channel_code": "cyx_594610065830148141601312",
+   "media_code": "cyx_594610065830148141601312"
+  },
+  {
+   "name": "SNT HD PY OPC",
+   "channel_code": "cyx_5710A8024552C0BE48",
+   "media_code": "cyx_5710A8024552C0BE48"
+  },
+  {
+   "name": "SUPER CANAL 33 RD HD",
+   "channel_code": "cyx_E55157EFE7D9ECD0",
+   "media_code": "cyx_E55157EFE7D9ECD0"
+  },
+  {
+   "name": "TC Television Internacional",
+   "channel_code": "cyx_77EB575F2CB812F4500A4D",
+   "media_code": "cyx_77EB575F2CB812F4500A4D"
+  },
+  {
+   "name": "TELECEIBA 7 HD",
+   "channel_code": "cyx_5AD5F26194427F5B31B9200C",
+   "media_code": "cyx_5AD5F26194427F5B31B9200C"
+  },
+  {
+   "name": "TELEMEDELLIN HD",
+   "channel_code": "cyx_5CD36F4C77D04131B235C4",
+   "media_code": "cyx_5CD36F4C77D04131B235C4"
+  },
+  {
+   "name": "TELESISTEMAS CANAL 11 RD HD",
+   "channel_code": "cyx_B913E1410C04936571F",
+   "media_code": "cyx_B913E1410C04936571F"
+  },
+  {
+   "name": "TELEUNION CANAL 16 HD",
+   "channel_code": "cyx_602465563312327304",
+   "media_code": "cyx_602465563312327304"
+  },
+  {
+   "name": "TELEVISION NACIONAL HD",
+   "channel_code": "cyx_86146FCDF9DFBC48D83485FC",
+   "media_code": "cyx_86146FCDF9DFBC48D83485FC"
+  },
+  {
+   "name": "TL ESTRELLA",
+   "channel_code": "cyx_2E990E6F53491645F87B662A",
+   "media_code": "cyx_2E990E6F53491645F87B662A"
+  },
+  {
+   "name": "TLT Tele tuya",
+   "channel_code": "cyx_D13A102CCF1F4D6FA95F256",
+   "media_code": "cyx_D13A102CCF1F4D6FA95F256"
+  },
+  {
+   "name": "TN 23 GUA HD",
+   "channel_code": "cyx_78772F6DCADED6989",
+   "media_code": "cyx_78772F6DCADED6989"
+  },
+  {
+   "name": "TN 8 NIC HD",
+   "channel_code": "cyx_325D5E717AF6B649E8C1496",
+   "media_code": "cyx_325D5E717AF6B649E8C1496"
+  },
+  {
+   "name": "TNT SPORTS CHILE 2 HD",
+   "channel_code": "cyx_F4649D6456804C9E853B5EC7",
+   "media_code": "cyx_F4649D6456804C9E853B5EC7"
+  },
+  {
+   "name": "TNT SPORTS CHILE 2 HD+",
+   "channel_code": "cyx_137D3CEBB4F8F95624D03D",
+   "media_code": "cyx_137D3CEBB4F8F95624D03D"
+  },
+  {
+   "name": "TNT SPORTS CHILE HD",
+   "channel_code": "cyx_A9F70E1DE8D6AEAA4FF0AE4F",
+   "media_code": "cyx_A9F70E1DE8D6AEAA4FF0AE4F"
+  },
+  {
+   "name": "TNT SPORTS CHILE HD+",
+   "channel_code": "cyx_D9C311EF4F8A26E5899A2C71",
+   "media_code": "cyx_D9C311EF4F8A26E5899A2C71"
+  },
+  {
+   "name": "TNT SUR HD",
+   "channel_code": "cyx_C29940865C3EB26698F9A68",
+   "media_code": "cyx_C29940865C3EB26698F9A68"
+  },
+  {
+   "name": "TOROS TV HD",
+   "channel_code": "cyx_178108671728149447807755",
+   "media_code": "cyx_178108671728149447807755"
+  },
+  {
+   "name": "TRU TV HD",
+   "channel_code": "cyx_98BF954BA8629F21EA39C",
+   "media_code": "cyx_98BF954BA8629F21EA39C"
+  },
+  {
+   "name": "TV CULTURAS",
+   "channel_code": "cyx_AFE0779444437BABD48C2D1A",
+   "media_code": "cyx_AFE0779444437BABD48C2D1A"
+  },
+  {
+   "name": "TV+ HD",
+   "channel_code": "cyx_57F2975213025FDC2873C197",
+   "media_code": "cyx_57F2975213025FDC2873C197"
+  },
+  {
+   "name": "TVE INTERNACIONAL HD",
+   "channel_code": "cyx_8D4FD02960986BB07A069CDC",
+   "media_code": "cyx_8D4FD02960986BB07A069CDC"
+  },
+  {
+   "name": "TVN 2 PAN 2 HD",
+   "channel_code": "cyx_83B143A715069185E6F8F91",
+   "media_code": "cyx_83B143A715069185E6F8F91"
+  },
+  {
+   "name": "USMP TV HD",
+   "channel_code": "cyx_36BA5174394B0FD53FADDC",
+   "media_code": "cyx_36BA5174394B0FD53FADDC"
+  },
+  {
+   "name": "USMPTV",
+   "channel_code": "cyx_96C415507E018FA9539",
+   "media_code": "cyx_96C415507E018FA9539"
+  },
+  {
+   "name": "VIDEOROLA",
+   "channel_code": "cyx_95688897993085317747001185",
+   "media_code": "cyx_95688897993085317747001185"
+  },
+  {
+   "name": "Via X Esports",
+   "channel_code": "cyx_573A835B23B2995AE23AE354A",
+   "media_code": "cyx_573A835B23B2995AE23AE354A"
+  },
+  {
+   "name": "WAN+",
+   "channel_code": "cyx_562F1D4F84F94304BC644C",
+   "media_code": "cyx_562F1D4F84F94304BC644C"
+  },
+  {
+   "name": "YES NETWORK USA HD",
+   "channel_code": "cyx_94188912871808018803223787",
+   "media_code": "cyx_94188912871808018803223787"
+  },
+  {
+   "name": "ZOOMOO HD",
+   "channel_code": "cyx_55031413000607690401962024",
+   "media_code": "cyx_55031413000607690401962024"
+  },
+  {
+   "name": "bolivia tv opc",
+   "channel_code": "cyx_6B7CBACC23985B81FCAAB5",
+   "media_code": "cyx_6B7CBACC23985B81FCAAB5"
+  },
+  {
+   "name": "bolivision opc",
+   "channel_code": "cyx_3DD5C2FBA3EBFB9CB74BFF658",
+   "media_code": "cyx_3DD5C2FBA3EBFB9CB74BFF658"
+  },
+  {
+   "name": "pat hd opc2",
+   "channel_code": "cyx_7CF99C222AF99CB4FE799155",
+   "media_code": "cyx_7CF99C222AF99CB4FE799155"
+  },
+  {
+   "name": "planeta tv",
+   "channel_code": "cyx_5EE24D1CF145FC8E75017DB03",
+   "media_code": "cyx_5EE24D1CF145FC8E75017DB03"
+  },
+  {
+   "name": "rtp opc",
+   "channel_code": "cyx_8C1027F4CC4C4676AF0F2D",
+   "media_code": "cyx_8C1027F4CC4C4676AF0F2D"
+  },
+  {
+   "name": "rts hd opc",
+   "channel_code": "cyx_8973FDFA6CFBE1A368085",
+   "media_code": "cyx_8973FDFA6CFBE1A368085"
+  }
+ ],
+ "derived_channels_from_heap": [
+  {
+   "name": "NFL PASS 11 HD",
+   "channel_code": "cyx_BCE48686128AA9E1A5C80AC56",
+   "media_code": "cyx_BCE48686128AA9E1A5C80AC5"
+  },
+  {
+   "name": "PAUL McCARTNEY",
+   "channel_code": "cyx_D6213E0CE205D60A185",
+   "media_code": "cyx_83B143A715069185E6F8F91"
+  },
+  {
+   "name": "RETRO TV HD",
+   "channel_code": "cyx_26581910542123426",
+   "media_code": "cyx_67673B12B8BDB756EDB682F5"
+  },
+  {
+   "name": "TELEMUNDO MOUNT HD",
+   "channel_code": "cyx_TELEMUNDO3USA",
+   "media_code": "cyx_gtNZqrfmotIilyQP"
+  },
+  {
+   "name": "USA NETWORK HD",
+   "channel_code": "cyx-SyfyHD",
+   "media_code": "cyx-F94D98EB4360be8eA43C337FF832"
+  }
+ ],
+ "epg_split": {
+  "total": 344,
+  "cyx_underscore_codes": 173,
+  "cyx_dash_28hex_codes": 1,
+  "human_named_cyx_dash": 107,
+  "other_formats": 62,
+  "lists": {
+   "id_under": [
+    "cyx_Telefuturo☆",
+    "cyx_22443479513272736478",
+    "cyx_792B94DB7717709CAA7AA4",
+    "cyx_8646545826126965854252006461",
+    "cyx_1621549981842122126825888848",
+    "cyx_437B35953862AE470_480p",
+    "cyx_8CDD138E450A6EC58",
+    "cyx_23CFB7F8A815AA98B3F71A62334",
+    "cyx_162E6EC3B59FD1E521F1D25B",
+    "cyx_44903791188008457747272",
+    "cyx_409E941493778B5FB7",
+    "cyx_5AF55C2A172D3786FD8CBF83",
+    "cyx_58320094002664236099950981",
+    "cyx_FoxSports1☆",
+    "cyx_TELECARIBE HD ☆",
+    "cyx_74503A9D4943E4EE7142",
+    "cyx_GOLDENEDGE☆",
+    "cyx_196887144373671",
+    "cyx_07B3E89551B626BA2450",
+    "cyx_8CDD138E450A6E_480p",
+    "cyx_0756318442778639067819638626",
+    "cyx_ESPN☆",
+    "cyx_7A1A0524509A17E70D29A64",
+    "cyx_ATVPlusHD☆",
+    "cyx_CrónicaTV☆",
+    "cyx_EWTN☆",
+    "cyx_60ACF43C5EDDF84024A83EDF5",
+    "cyx_42237528931693937614_480p",
+    "cyx_MTVHits☆",
+    "cyx_8583991586802883545_480p",
+    "cyx_409E941493778B5_480p",
+    "cyx_FB7CD5F7E4EE44D9D5B25887",
+    "cyx_921A95AEA6BEF5DB23_480p",
+    "cyx_4951487402385684171283290352",
+    "cyx_2187631362225884386171535502",
+    "cyx_LNPlus",
+    "cyx_8187936040837164922879389433",
+    "cyx_4843843183178569082069248819",
+    "cyx_36383591975441128767882_480p",
+    "cyx_87369643941470677307",
+    "cyx_2991439621291462262189_480p",
+    "cyx_TELECAFE HD ☆",
+    "cyx_37787046092661183749537_480p",
+    "cyx_979ADC9BC255F38F7890CC68",
+    "cyx_CableNoticias",
+    "cyx_7146504627514056501593505348",
+    "cyx_TyCSports☆",
+    "cyx_5218660081200558851406462511",
+    "cyx_Lifetime",
+    "cyx_Distrito Comedia HD_480p",
+    "cyx_080482950240501445188005",
+    "cyx_6B3CE2B1BBD004EDA7_480p",
+    "cyx_66323497791345655_480p",
+    "cyx_3778704609266118374953783596",
+    "cyx_55888546256389932839855",
+    "cyx_Rcnnovelas☆",
+    "cyx_9026600828964511266459051366",
+    "cyx_E8ED10C99F0B4BE64535",
+    "cyx_2991439621291462262189",
+    "cyx_36967856586604965138",
+    "cyx_3341176717248893525297510208",
+    "cyx_31295552388572332348299",
+    "cyx_6C07252A56D825C6F9FF_480p",
+    "cyx_80563090178619165009",
+    "cyx_2289377297847262343437_480p",
+    "cyx_7A1A0524509A17E70D2_480p",
+    "cyx_MasChic☆",
+    "cyx_492310852366171011443815385",
+    "cyx_9143EC6988F8E47EB9",
+    "cyx_79332479206523928186_480p",
+    "cyx_79332479206523928186",
+    "cyx_fL3eb28RZr5OpaE_480p",
+    "cyx_C9N☆",
+    "cyx_99C1AA554B39b3d_480p",
+    "cyx_67673B12B8BDB756EDB682F5",
+    "cyx_608925873717840463137805",
+    "cyx_2IJYUtbF6QnJ5lLS_480p",
+    "cyx_49231085236617101_480p",
+    "cyx_622AE53E223E5ACA13818A14",
+    "cyx_B4614C4F18CD1440325",
+    "cyx_2E60D5FEBE2AD90917C7",
+    "cyx_4998455407881714266104480832",
+    "cyx_40409198981114913_480p",
+    "cyx_3661711604125856813368",
+    "cyx_5747465152873101063712347639",
+    "cyx_S8PMwo3e5KLbek_480p",
+    "cyx_5710A8024552C0BE48",
+    "cyx_Canal26☆",
+    "cyx_376369966157168",
+    "cyx_3479BDC0395DBA701240F2A4",
+    "cyx_DF17627ABDD9F49107_480p",
+    "cyx_30D5ADD4F376BF65E59_480p",
+    "cyx_E4A3C79453D5BE3D514D56",
+    "cyx_5617909052912123964223214163",
+    "cyx_348787265949997909541630",
+    "cyx_808F0D67EF3D53C1F5E0A24",
+    "cyx_828102186877634_480p",
+    "cyx_90266008289645112664590_480p",
+    "cyx_6BD1EDB648CBbd4eC_480p",
+    "cyx_936701715188658277607065",
+    "cyx_387532033530787183_480p",
+    "cyx_30D5ADD4F376BF65E593EF4E",
+    "cyx_4826273899681167201265903766",
+    "cyx_60892587371784046_480p",
+    "cyx_8281021868776346888804187365",
+    "cyx_8A5BA0A5CC1D4E46DDE007607",
+    "cyx_5AF55C2A172D3786FD8_480p",
+    "cyx_M29LhALkORmT6te_480p",
+    "cyx_892AEEBF76009F9FC5F8C8",
+    "cyx_7D948E6154964B47B1DCAAE",
+    "cyx_65000138979959404315065_480p",
+    "cyx_892AEEBF76009F9FC_480p",
+    "cyx_VOLVER",
+    "cyx_B669C6B623C919F6CFA163AF",
+    "cyx_ACF15B592CC2223E5B1",
+    "cyx_5053987865802719613643196",
+    "cyx_481E05081BAE50D8157A9FFF",
+    "cyx_2289377297847262343437_720p",
+    "cyx_5CD36F4C77D04131B235C4",
+    "cyx_13C",
+    "cyx_6456142288379567439360568729",
+    "cyx_ELNUEVE☆",
+    "cyx_7348349074789673434962299701",
+    "cyx_8879EB61A590389A8F168919",
+    "cyx_690157842682605762807688",
+    "cyx_17723435019492563492967967",
+    "cyx_269469921427324585599929",
+    "cyx_2817964766065527849481075816",
+    "cyx_BB32515EB902E20FA5B1FCAD",
+    "cyx_AA0492A7B61CA7A5F7BE9DE0",
+    "cyx_98814905553041646_480p",
+    "cyx_1E470B1A1466C40EF4F1CE33",
+    "cyx_5AD5F26194427F5B31B9200C",
+    "cyx_9547658884268273611629791534",
+    "cyx_8A34CEB6DAC2C0E1ACE843A74",
+    "cyx_4040919898111491302892590008",
+    "cyx_85948903304174385897187",
+    "cyx_14844688418625177490858",
+    "cyx_91C9E3F775610714E10F1",
+    "cyx_3875320335307871835105393631",
+    "cyx_8067155268968689168998401832",
+    "cyx_9881490555304164628541864337",
+    "cyx_Adn40☆",
+    "cyx_TELEMUNDO1USA",
+    "cyx_3318619389845169900151752688",
+    "cyx_BitMe☆",
+    "cyx_57EB439F4A15D59B7087A5E",
+    "cyx_HOLATV☆",
+    "cyx_506F7C73E7E7F4EA44FE08AD",
+    "cyx_AZCorazon☆",
+    "cyx_3271500099060194187",
+    "cyx_AZCinemaMX☆",
+    "cyx_9773691469851603252182765524",
+    "cyx_RECTVCHILE☆",
+    "cyx_87369643941470_480p",
+    "cyx_6500013897995940431506539947",
+    "cyx_Z4MB4Wi9bOtFENc6_480p",
+    "cyx_0605886283054285432037770095",
+    "cyx_96308588239071877024774",
+    "cyx_352710514540854",
+    "cyx_488120545105644195",
+    "cyx_2E30EA3D416199FB2ADCB1",
+    "cyx_2662717743251145",
+    "cyx_Canal3☆",
+    "cyx_Guatevision ☆",
+    "cyx_754904644950295",
+    "cyx_5267223151385825605162589307",
+    "cyx_8C6BDF0C4CAE997477_480p",
+    "cyx_8575716521744906032565399635",
+    "cyx_9135307731147995826246",
+    "cyx_9719329275097811545051193306",
+    "cyx_4223752893169393761419415669",
+    "cyx_9662224081879738441597234631"
+   ],
+   "id_dash28": [
+    "cyx-FCB2C1F34018a709EE178AF0E2ED"
+   ],
+   "human": [
+    "cyx-ESPN2_Central",
+    "cyx-GolTVHD",
+    "cyx-HBO2",
+    "cyx-FoxSports2HD",
+    "cyx-MEGAHD",
+    "cyx-EiGourmet",
+    "cyx-RCNHD",
+    "cyx-DistritocomediaHD",
+    "cyx-CityTV",
+    "cyx-FoxSports1ChileHD",
+    "cyx-Telepacifico",
+    "cyx-FoxPremiumCinemaHD",
+    "cyx-FoxSports3HD",
+    "cyx-MovistarDeportesHD",
+    "cyx-HBOHD",
+    "cyx-GoldenHD",
+    "cyx-AMC",
+    "cyx-CNNEspañol",
+    "cyx-ESPN2HD+",
+    "cyx-ESPN3HD",
+    "cyx-C5N",
+    "cyx-DisneyXD",
+    "cyx-ESPN3HD+",
+    "cyx-Panamericana",
+    "cyx-DisneyJunior",
+    "cyx-FoxPremiumFamily",
+    "cyx-LasEstrellasHD",
+    "cyx-CNNChileHD",
+    "cyx-GOLTV",
+    "cyx-CHVHD",
+    "cyx-SonyHD",
+    "cyx-Boomerang",
+    "cyx-B2F1847E4A31acd511AA_480p",
+    "cyx-TVperu",
+    "cyx-FXHDCentral",
+    "cyx-UniversalChannelHD",
+    "cyx-H2HD",
+    "cyx-DiscoveryHD+",
+    "cyx-FCB2C1F34018a709EE178_480p",
+    "cyx-DiscoveryHD",
+    "cyx-DiscoveryWorldHD+",
+    "cyx-A24",
+    "cyx-DiscoveryIDHD",
+    "cyx-ATV",
+    "cyx-NickJR",
+    "cyx-LaRedHD",
+    "cyx-OutdoorChannelHD",
+    "cyx-StudioUniversalHD",
+    "cyx-DiscoveryTurboHD",
+    "cyx-TLCDiscoveryHD",
+    "cyx-FoxPremiumMovies",
+    "cyx-ETCTV",
+    "cyx-FXNHDCentral",
+    "cyx-Canal13_Argentina",
+    "cyx-CDFFHD",
+    "cyx-NatGeoHD",
+    "cyx-HistoryHD",
+    "cyx-TNTHD",
+    "cyx-HistoryHD+",
+    "cyx-DiscoveryTheaterHD",
+    "cyx-0450E2894FE5947b7087414_480p",
+    "cyx-SpaceHD",
+    "cyx-TNHD",
+    "cyx-AXN",
+    "cyx-TVNHD",
+    "cyx-ESPN+HD",
+    "cyx-ESPN2HD",
+    "cyx-WarnerHDChile",
+    "cyx-GolPeruHD",
+    "cyx-TVpublicaHD",
+    "cyx-A&EHD",
+    "cyx-GoldenPremier",
+    "cyx-Canal5HD",
+    "cyx-FoxSeriesEste",
+    "cyx-Cinemax",
+    "cyx-FoxSports2HD+",
+    "cyx-HBOHD+",
+    "cyx-SonyHDCentral",
+    "cyx-AmericaTVHDPeru",
+    "cyx-DePelicula",
+    "cyx-DiscoveryHome&HealthHD",
+    "cyx-AnimalPlanetHD",
+    "cyx-LatinaHD",
+    "cyx-Canal13ChileHD",
+    "cyx-AZTECA7HD",
+    "cyx-CinecanalHDCentral",
+    "cyx-ESPNHD",
+    "cyx-NATGEOHD+",
+    "cyx-CartoonNetworkHD",
+    "cyx-TNTSeries_Central",
+    "cyx-Canal24horasHD",
+    "cyx-FoxLifeHD",
+    "cyx-TelefeHD",
+    "cyx-AméricaTVHDArg",
+    "cyx-ElTreceHD",
+    "cyx-B2F1847E4A31acd511AA480p",
+    "cyx-DiscoveryWorldHD",
+    "cyx-WarnerHD+",
+    "cyx-CDFHD",
+    "cyx-BabyTV",
+    "cyx-CanalAntigua",
+    "cyx-MTVliveHD",
+    "cyx-Telemundointenacional",
+    "cyx-DiscoveryKidsHD",
+    "cyx-TCM",
+    "cyx-FoxLife",
+    "cyx-MTVHD"
+   ],
+   "other": [
+    "test_for_xietianci",
+    "NexCanal21☆",
+    "CDOPREMIUMHD☆",
+    "Mega_HD_cyx_480p",
+    "UnivisionTNDUSA-cyx",
+    "TNT☆",
+    "Warner HD_480p",
+    "Golden Premier HD_cyx_480p",
+    "EcuadorTV☆",
+    "ST☆R+ 3 HD_cyx",
+    "TLT☆",
+    "TVE☆",
+    "tlNovela SD",
+    "Europa_Europa_HD_cyx_480p",
+    "Universal Channel HD_480p",
+    "Univision_TND_USA_HD_cyx_480p",
+    "foro_tv_SD_cyx_480p",
+    "FXM_HD_Central_cyx_480p",
+    "Studio Universal HD_cyx_480p",
+    "Univision_East_HD_cyx_480p",
+    "TYC_SPORTS_cyx_480p",
+    "Canal_24_Horas_HD_cyx_480p",
+    "TELEHIT SD",
+    "FOROTV☆",
+    "Telefe_HD_480p",
+    "Discovery_ID_HD_cyx_480p",
+    "Disney_XD_cyx_480p",
+    "Discovery Kids HD_cyx_480p",
+    "CineAR☆",
+    "24h☆",
+    "Azteca_7_HD_cyx_480p",
+    "America_TV_HD_Peru_cyx_480p",
+    "Golden HD_480p",
+    "TVN_HD_cyx_480p",
+    "Telepacifico_cyx_480p",
+    "UnivisionEastHD-cyx",
+    "Galavision_East_cyx_480p",
+    "GalavisionEast-cyx",
+    "DEPELICULAPLUS☆",
+    "CINELATINOHD☆",
+    "CNN_Español_cyx_480p",
+    "Latina_HD_cyx_480p",
+    "History_HD_480p",
+    "ST☆R+HD_cyx",
+    "Sony HD CentralCyx480p",
+    "La_Red_HD__cyx_480p",
+    "Win_Sports_HD_cyx_480p",
+    "RCN_HD_cyx_480p",
+    "TELEHIT_SD_cyx_480p",
+    "Sony_HD_cyx_480p",
+    "Canal13ChileHD_cyx_480p",
+    "Sony HD Central_cyx_480p",
+    "Las_Estrellas_Mex_HD_cyx_480p",
+    "Discovery HD_480p",
+    "CNN_Chile_HD_cyx_480p",
+    "TNT_HD_cyx__480p",
+    "Canal 5 HD_cyx_480p",
+    "Nick_JR_HD_cyx_480p",
+    "ESPN 2 HD_480P",
+    "DE_PELICULA_cyx_480p",
+    "América_TV_HD_Arg_cyx_480p",
+    "Disney_Junior_cyx_480p"
+   ]
+  }
+ },
+ "salts_candidates": [
+  "cyx",
+  "cyx-",
+  "cyx_",
+  "latinotv",
+  "latino",
+  "com.global.latinotv",
+  "com.spanish.latinotvod",
+  "dCsPLwiy",
+  "cloudstream",
+  "54608",
+  "2024-11-15 19:08:51_29_14.1_4.9.170",
+  "xycjco",
+  "720p",
+  "fc9548268cd91bd1506d8fb142cf8972",
+  "ca0e53edac957b8f6f187528933355f1",
+  "945257240",
+  "25885636",
+  "b940e017",
+  "D#a!t-a&",
+  "c6768bbe",
+  "b972E8a5A4e0e8Ff",
+  "AoaTAka",
+  "pa*Tpe*",
+  "&@eT0f!8",
+  "4c087185-05c8-4683-901d-e1e4d8707c04",
+  "b700bce0-91c7-47df-a593-747ae941bf34",
+  "0e5e9c33-f8c3-4568-86c5-2e4f57523f72",
+  "20799a27-fa80-4b36-b2db-0f8141f24180",
+  "629a824d-c717-4ba5-bc0f-3f3968554d01",
+  "latinotvod",
+  "spanish",
+  "global",
+  "brasiltv",
+  "utc-3",
+  "26",
+  "utc-3/26",
+  "v2/live/app",
+  "epg"
+ ]
+}
