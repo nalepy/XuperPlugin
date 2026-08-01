@@ -45,3 +45,15 @@ The boxes are on a home LAN reached from any location via a Tailscale **subnet r
 changes. Off-LAN the latency is higher (fine for control, slow for big memory dumps). If adb flaps after
 a network change, retry `adb disconnect <ip>:5555 && adb connect <ip>:5555`. `.40` + the boxes must stay
 powered at home (a TV HDMI-CEC auto-off will sleep an HDMI-connected box — keep boxes unplugged from TVs).
+
+## Dialog / paywall dead-end matrix (owner knowledge — 2026-08-01)
+Fresh-install + launch can throw dialogs. NEVER wait for the owner — automate each:
+| Dialog | Action |
+|---|---|
+| **Permission (folders/storage/etc)** after fresh install | `install -g` at install; else `pm grant`/`appops`. Auto-tap ALLOW via uiautomator. |
+| **Login / register** | Continue as guest/device-activate if possible; else write `NEEDS.md` (creds available for some accounts — check `orchestrator/.env`). |
+| **Update to newer version** | NEVER accept. Dismiss/skip ("Later"/"Not now"/×). If it HARD-blocks, that's a finding — record the version-gate + trigger. |
+| **PAY / VIP / Premium (full channels)** | **THE critical one.** Select the **FREE** option to start streaming free channels. Per-app behavior: **TeleLatino** = free tier streams some channels ✅; **UniTV** = free tier streams some ✅; **YouCine** = closes (no free tier) ❌; **BrasilTV** = closes ❌; XTV = paywall. If the app closes with no free tier, that's a dead end — record it, don't loop. |
+
+**Golden rule for dialogs:** paywall → tap FREE; update → skip; permission → grant; login → guest or
+NEEDS.md. If the app has no free tier and closes, it's a go/no-go data point, not a stall.
