@@ -34,8 +34,10 @@ MODEL = "V76PRO"                                            # device model
 MANUFACTURER = "Google"                                     # spoofed manufacturer
 
 # ── Account (owner creds, session 33b) ─────────────────────────────────────
-TELELATINO_USER = "nestor.ale@gmail.com"
-TELELATINO_PASS = "Ian20jesus"
+# Creds in orchestrator/.env (gitignored) as TELELATINO_USER/TELELATINO_PASS
+import os as _os
+TELELATINO_USER = _os.environ.get("TELELATINO_USER", "")
+TELELATINO_PASS = _os.environ.get("TELELATINO_PASS", "")
 
 # ── Live hosts ─────────────────────────────────────────────────────────────
 DCS_HOST = "http://emowvv.dqiswip4.xyz"                     # serves getAddr (returnCode:0)
