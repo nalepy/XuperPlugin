@@ -52,7 +52,7 @@ Fresh-install + launch can throw dialogs. NEVER wait for the owner — automate 
 |---|---|
 | **Permission (folders/storage/etc)** after fresh install | `install -g` at install; else `pm grant`/`appops`. Auto-tap ALLOW via uiautomator. |
 | **Login / register** | Continue as guest/device-activate if possible; else write `NEEDS.md` (creds available for some accounts — check `orchestrator/.env`). |
-| **Update to newer version** | NEVER accept. Dismiss/skip ("Later"/"Not now"/×). If it HARD-blocks, that's a finding — record the version-gate + trigger. |
+| **Update to newer version** | **UPDATED POLICY (2026-08-01): ACCEPT the update — it delivers the current whitelist-passing build, which is prime intel** (version gates want the NEWER version). BEFORE accepting: (1) pull + save the current APK (`adb pull /data/app/<pkg>/*/base.apk _session/apks/<pkg>-<ver>.apk`) so you can reinstall/rollback; (2) capture the update URL/new versionCode if visible (logcat/strings — it's a download endpoint worth noting). Then accept, note the NEW versionCode, and re-analyze it (it likely passes the gate the old one failed). Keep the old APK saved. |
 | **PAY / VIP / Premium (full channels)** | **THE critical one.** Select the **FREE** option to start streaming free channels. Per-app behavior: **TeleLatino** = free tier streams some channels ✅; **UniTV** = free tier streams some ✅; **YouCine** = closes (no free tier) ❌; **BrasilTV** = closes ❌; XTV = paywall. If the app closes with no free tier, that's a dead end — record it, don't loop. |
 
 **Golden rule for dialogs:** paywall → tap FREE; update → skip; permission → grant; login → guest or
