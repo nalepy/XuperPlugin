@@ -107,7 +107,7 @@ with **opaque encrypted path** (OkHttp interceptors) on the real DES-resolved ho
 Implication: the **portal API host pool in production shifts** (CF front domains). Wire
 discovery must separate **ancillary** hosts (WS, EPG, ads) from **portalCore**. Top TLS
 candidate from cold start: `34fhwevf.cbcf4gg3f.com` (404 on logical API path from plugin).
-Full session notes: [SESSION-2026-07-27.md](SESSION-2026-07-27.md).
+Full session notes: [SESSION-2026-07-31.md](SESSION-2026-07-31.md).
 
 Analysis tools: `scripts/deep_analyze_pcap.py`; capture: `_session/capture_portal.sh`,
 `_session/capture_sgyc_port80.sh`.

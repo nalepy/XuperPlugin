@@ -34,11 +34,12 @@ Full detail (hosts, cookies, formats, capture method) in [ARCHITECTURE.md](ARCHI
 
 | Doc | What |
 |-----|------|
-| [HANDOFF.md](HANDOFF.md) | **Start here** — Win11 orchestration, topology, session TL;DR |
-| [SESSION-2026-07-29.md](SESSION-2026-07-29.md) | **Latest session** — lever fix, findings, next steps |
-| [NEXT-BLOCKER.md](NEXT-BLOCKER.md) | Current blocker + session archive |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Stream pipeline, cookies, MITM method, wire host pool |
-| [SESSION-2026-07-27.md](SESSION-2026-07-27.md) | Earlier session notes |
+| [GOAL0.md](GOAL0.md) | **Keystone** — decrypted DEX (carved from `.4`, done) |
+| [GOAL1.md](GOAL1.md) | Crack XTV — patch gate checks + re-lock |
+| [GOAL2.md](GOAL2.md) | Own IPTV APK on XTV's backend (XuperPlugin) |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Stream pipeline, cookies, hosts, capture method |
+| [SESSION-2026-07-31.md](SESSION-2026-07-31.md) | **Latest session** (30) — portalCore connection-gate |
+| [NEXT-BLOCKER.md](NEXT-BLOCKER.md) | Emulation tracker (fallback-only, superseded) |
 
 ## Source layout (`app/src/main/java/com/xuper/plugin/`)
 

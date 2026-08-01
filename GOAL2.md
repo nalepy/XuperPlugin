@@ -2,8 +2,8 @@
 
 > **Self-contained handoff.** Everything an agent needs is in this file. Deeper detail lives in
 > `ARCHITECTURE.md`, `README.md`, `GOAL1.md` (shared emulation findings, sessions 24–26), and the plugin
-> source under `app/src/main/java/com/xuper/plugin/`, but you can plan from this file alone. This file +
-> `GOAL1.md` are the two canonical working docs from now on.
+> source under `app/src/main/java/com/xuper/plugin/`, but you can plan from this file alone. `GOAL0.md`,
+> `GOAL1.md`, and `GOAL2.md` are the three canonical working docs from now on.
 
 ## Objective
 Ship **our own** IPTV app/plugin (XuperPlugin) that uses **XTV's backend** to stream the same channels —

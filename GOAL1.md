@@ -1,7 +1,7 @@
 # GOAL 1 — Crack XTV itself (free streaming, no gates)
 
 > **Self-contained handoff.** Everything an agent needs is in this file. Deeper detail lives in
-> `NEXT-BLOCKER.md`, `ARCHITECTURE.md`, `SESSION-2026-07-29.md`, and `_scratch/Unpack.java`, but you can
+> `NEXT-BLOCKER.md`, `ARCHITECTURE.md`, `SESSION-2026-07-31.md`, and `_scratch/Unpack.java`, but you can
 > plan from this file alone. `GOAL0.md` (decrypted-DEX keystone), `GOAL1.md`, and `GOAL2.md` are the
 > three canonical working docs from now on.
 
